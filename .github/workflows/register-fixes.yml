@@ -1,0 +1,61 @@
+name: Register SMR Community Fixes
+
+# Runs after something lands on main. If a fix file is not yet in the
+# metadata.lua 'code' list and items.lua, this appends it at the end of both
+# lists, bumps the integer 'version', and commits that itself. Contributors never have to do the bookkeeping by hand.
+#
+# Safe by construction: it runs only on already-reviewed code on main, so it never
+# executes anything from an untrusted fork, and it needs no pull_request_target.
+#
+# Two guards stop it triggering itself: the actor check below, and [skip ci] in the
+# commit message it writes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Code/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: register-fixes
+  cancel-in-progress: false
+
+jobs:
+  register:
+    name: Add missing registration and bump the version
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # a real token history so the pushed commit lands on main
+          persist-credentials: true
+
+      - name: Install Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      # Refuse to register anything that a person still has to fix. Registering a
+      # fix with a duplicate id, or one still full of template placeholders, would
+      # only publish the mistake.
+      - name: Check before registering
+        run: lua5.4 tools/sync_mod.lua check
+
+      - name: Register and bump
+        run: lua5.4 tools/sync_mod.lua sync
+
+      - name: Commit if anything changed
+        run: |
+          if git diff --quiet -- metadata.lua items.lua; then
+            echo "Nothing to register; metadata.lua and items.lua already match Code/."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add metadata.lua items.lua
+          git commit -m 'Register new bug fixes and bump the mod version [skip ci]'
+          git push
+          echo "### Registered new bug fixes" >> "$GITHUB_STEP_SUMMARY"
+          git show --stat --oneline HEAD >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,48 @@
+name: Check SMR Community Fixes
+
+# Runs on every pull request that touches the mod payload. Read-only: it never
+# writes to the repository, so it is safe for pull requests from forks.
+#
+# It fails only on things a person has to fix - a duplicate id, a pinned number
+# already in use, a template placeholder left behind, debug left true, a reference
+# to framework internals, or a missing description or set_enabled. A fix that is
+# simply not registered in metadata.lua and items.lua yet is reported as a notice,
+# not a failure, because the register-fixes workflow adds that automatically once
+# the pull request is merged.
+
+on:
+  pull_request:
+    paths:
+      - 'Code/**'
+      - 'metadata.lua'
+      - 'items.lua'
+      - 'templates/**'
+      - 'tools/**'
+      - '.github/workflows/check-fixes.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Registration and self-containment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      - name: Parse every Lua file
+        run: |
+          status=0
+          while IFS= read -r file; do
+            if ! luac5.4 -p "$file"; then
+              echo "::error file=$file::$file does not parse"
+              status=1
+            fi
+          done < <(find Code templates -name '*.lua' -print; echo metadata.lua; echo items.lua)
+          exit $status
+
+      - name: Check fix registration
+        run: lua5.4 tools/sync_mod.lua check
