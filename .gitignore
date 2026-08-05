@@ -4,3 +4,6 @@ __pycache__/
 
 # Captured API traffic. Never commit: header values can contain credentials.
 routes*.json
+
+# Local working handoff for the publishing/auth work.
+tools/publish/HANDOFF.md
