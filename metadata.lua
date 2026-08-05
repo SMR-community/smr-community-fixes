@@ -27,7 +27,6 @@ return PlaceObj('ModDef', {
 		"Code/smrcf_restore_clustered_lights.lua",
 		"Code/smrcf_restore_mod_screenshots.lua",
 	},
-	'screenshot1', "Mod/SMRCF/Images/screenshot_01.jpg",
 	'TagGameplay', true,
 	'TagOther', true,
 })
