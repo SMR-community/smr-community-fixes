@@ -178,8 +178,8 @@ needs no game installed anywhere — it runs on a hosted Linux runner and talks 
 Paradox over HTTP. Merging does not publish. Pushing a version tag does:
 
 ```
-git tag v3
-git push origin v3
+git tag v4
+git push origin v4
 ```
 
 [`publish.yml`](.github/workflows/publish.yml) then checks the payload, refuses
@@ -229,7 +229,7 @@ summary:
 version in the title, a link to the mod page, the commits since the last
 release, and `SMRCF.zip` — the exact payload uploaded — attached to it.
 
-**If it failed**, you get an issue titled `Publishing v3 failed`, saying which
+**If it failed**, you get an issue titled `Publishing v4 failed`, saying which
 step broke, the HTTP status, the server's own message, who tagged and a link to
 the run. Tagging again comments on that same issue rather than opening another,
 and it closes itself once a tag succeeds.
