@@ -61,11 +61,115 @@ ROUTES: dict[str, tuple[str, str] | None] = {
 
 
 class PdxError(RuntimeError):
-    pass
+    """A failed call, carrying enough to tell somebody what went wrong."""
+
+    def __init__(self, step: str, message: str, status: int | None = None,
+                 retryable: bool = False) -> None:
+        super().__init__(message)
+        self.step = step
+        self.status = status
+        self.retryable = retryable
 
 
 def missing_routes() -> list[str]:
     return sorted(name for name, route in ROUTES.items() if route is None)
+
+
+# --------------------------------------------------------------------------
+# Reporting: which step failed, why, and how long each one took
+# --------------------------------------------------------------------------
+
+# Transient. A timeout is the one failure already seen against this service, on
+# AsyncPdxUploadModContent with a large payload, so content upload is retried.
+RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
+MAX_ATTEMPTS = 4
+BACKOFF_SECONDS = 3.0
+
+
+@dataclass
+class StepResult:
+    name: str
+    ok: bool
+    attempts: int = 1
+    elapsed_ms: int = 0
+    status: int | None = None
+    message: str = ""
+
+    def line(self) -> str:
+        mark = "ok  " if self.ok else "FAIL"
+        status = str(self.status) if self.status else "-"
+        retries = f" after {self.attempts} attempts" if self.attempts > 1 else ""
+        detail = f"  {self.message}" if self.message else ""
+        return f"  {mark}  {self.name:<20} {status:>4}  {self.elapsed_ms:>6} ms{retries}{detail}"
+
+
+class Reporter:
+    """Collects step outcomes and publishes them where a person will see them."""
+
+    def __init__(self) -> None:
+        self.steps: list[StepResult] = []
+
+    def add(self, result: StepResult) -> None:
+        self.steps.append(result)
+        print(result.line(), flush=True)
+
+    @property
+    def failure(self) -> StepResult | None:
+        return next((s for s in self.steps if not s.ok), None)
+
+    def reached(self, name: str) -> bool:
+        return any(s.name == name and s.ok for s in self.steps)
+
+    def summary_markdown(self, title: str) -> str:
+        lines = [f"### {title}", "", "| Step | Result | Status | Time | Detail |",
+                 "|---|---|---|---|---|"]
+        for step in self.steps:
+            mark = "✅" if step.ok else "❌"
+            detail = step.message.replace("|", "\\|")[:200] or "—"
+            lines.append(
+                f"| `{step.name}` | {mark} | {step.status or '—'} | "
+                f"{step.elapsed_ms} ms | {detail} |"
+            )
+        return "\n".join(lines) + "\n"
+
+    def publish(self, title: str, result_path: str | None = None) -> None:
+        summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary_file:
+            with open(summary_file, "a", encoding="utf-8") as handle:
+                handle.write(self.summary_markdown(title))
+        if result_path:
+            payload = {
+                "ok": self.failure is None,
+                "failed_step": self.failure.name if self.failure else None,
+                "status": self.failure.status if self.failure else None,
+                "message": self.failure.message if self.failure else "",
+                "steps": [vars(s) for s in self.steps],
+            }
+            with open(result_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
+
+
+def server_message(raw: bytes) -> str:
+    """Best-effort human-readable message out of an error body.
+
+    The SDK sends X-PDX-Error-Version: 2, so responses are structured, but the
+    field names are unknown until a real error is captured. Try the usual
+    candidates, fall back to raw text.
+    """
+    text = raw.decode("utf-8", "replace").strip()
+    try:
+        data = json.loads(text)
+    except (ValueError, UnicodeDecodeError):
+        return text[:300]
+    if isinstance(data, dict):
+        for key in ("message", "error_description", "error", "detail", "title", "reason"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value[:300]
+        errors = data.get("errors")
+        if isinstance(errors, list) and errors:
+            return str(errors[0])[:300]
+    return text[:300]
 
 
 # --------------------------------------------------------------------------
@@ -134,23 +238,19 @@ class PdxSession:
         self.base = base.rstrip("/")
         self.timeout = timeout
         self.creds: Credentials | None = None
+        self.report = Reporter()
 
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        body: bytes = b"",
-        content_type: str = "",
-        signed: bool = True,
+    def _send_once(
+        self, method: str, path: str, body: bytes, content_type: str, signed: bool
     ) -> Any:
+        """One attempt. Raises PdxError tagged retryable or not."""
         url = f"{self.base}{path}"
         headers = dict(PDX_HEADERS)
         if content_type:
             headers["Content-Type"] = content_type
         if signed:
             if self.creds is None:
-                raise PdxError("not logged in")
+                raise PdxError("auth", "not logged in")
             headers["Authorization"] = hawk_header(
                 self.creds, method, url, body, content_type
             )
@@ -163,10 +263,15 @@ class PdxSession:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:500]
-            raise PdxError(f"{method} {path} -> HTTP {exc.code}: {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise PdxError(f"{method} {path} -> {exc.reason}") from exc
+            # 4xx is the caller's fault and will fail identically next time.
+            # Retrying a rejected password is how accounts get locked.
+            raise PdxError(
+                "http", server_message(exc.read()) or exc.reason,
+                status=exc.code, retryable=exc.code in RETRY_STATUSES,
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            reason = getattr(exc, "reason", exc)
+            raise PdxError("network", f"{reason}", retryable=True) from exc
 
         if not raw:
             return None
@@ -175,18 +280,55 @@ class PdxSession:
         except json.JSONDecodeError:
             return raw
 
+    def _request(
+        self,
+        step: str,
+        method: str,
+        path: str,
+        *,
+        body: bytes = b"",
+        content_type: str = "",
+        signed: bool = True,
+    ) -> Any:
+        started = time.monotonic()
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                result = self._send_once(method, path, body, content_type, signed)
+            except PdxError as exc:
+                last = attempt == MAX_ATTEMPTS
+                if exc.retryable and not last:
+                    delay = BACKOFF_SECONDS * (2 ** (attempt - 1))
+                    print(f"  ...  {step} failed ({exc}), retry {attempt + 1}"
+                          f"/{MAX_ATTEMPTS} in {delay:.0f}s", flush=True)
+                    time.sleep(delay)
+                    continue
+                self.report.add(StepResult(
+                    step, ok=False, attempts=attempt,
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                    status=exc.status,
+                    message=f"{exc}" + (" (gave up after retries)" if exc.retryable else ""),
+                ))
+                exc.step = step
+                raise
+            self.report.add(StepResult(
+                step, ok=True, attempts=attempt,
+                elapsed_ms=int((time.monotonic() - started) * 1000), status=200,
+            ))
+            return result
+        raise AssertionError("unreachable")
+
     def _json(self, route: str, payload: dict, *, signed: bool = True, **fmt) -> Any:
         method, path = _route(route)
         body = json.dumps(payload).encode()
         return self._request(
-            method, path.format(**fmt), body=body,
+            route, method, path.format(**fmt), body=body,
             content_type="application/json", signed=signed,
         )
 
     def _binary(self, route: str, blob: bytes, **fmt) -> Any:
         method, path = _route(route)
         return self._request(
-            method, path.format(**fmt), body=blob,
+            route, method, path.format(**fmt), body=blob,
             content_type="application/octet-stream",
         )
 
@@ -204,7 +346,7 @@ class PdxSession:
 
     def mod_details(self, mod_id: int) -> dict:
         method, path = _route("mod_details")
-        return self._request(method, path.format(mod_id=mod_id))
+        return self._request("mod_details", method, path.format(mod_id=mod_id))
 
     def setup_for_publish(self, folder_name: str | None = None) -> dict:
         return self._json("setup_publish", {"folderName": folder_name} if folder_name else {})
@@ -228,8 +370,9 @@ def _route(name: str) -> tuple[str, str]:
     route = ROUTES.get(name)
     if route is None:
         raise PdxError(
+            name,
             f"route '{name}' is unknown. Run a capture (see PDX_API_NOTES.md) "
-            f"and fill ROUTES in {os.path.basename(__file__)}."
+            f"and fill ROUTES in {os.path.basename(__file__)}.",
         )
     return route
 
@@ -237,7 +380,7 @@ def _route(name: str) -> tuple[str, str]:
 def _read_limited(path: str, limit: int, what: str) -> bytes:
     size = os.path.getsize(path)
     if size > limit:
-        raise PdxError(f"{what} {path} is {size} bytes; the service rejects over {limit}")
+        raise PdxError(what, f"{path} is {size} bytes; the service rejects over {limit}")
     with open(path, "rb") as handle:
         return handle.read()
 
@@ -255,32 +398,51 @@ def publish_mod(args: argparse.Namespace) -> int:
         return 2
 
     session = PdxSession(HOSTS[args.env])
-    session.login(user, password)
+    title = f"Publish to Paradox Mods ({args.env}) — version {args.version}"
 
-    details = session.mod_details(args.mod_id) if args.mod_id else {}
-    existing_name = details.get("Name") or None
-    setup = session.setup_for_publish(existing_name)
-    mod_name = existing_name or setup["modName"]
+    try:
+        session.login(user, password)
 
-    thumbnail = session.upload_asset(mod_name, args.thumbnail)
-    screenshots = [session.upload_asset(mod_name, s) for s in args.screenshot]
-    content = session.upload_content(mod_name, args.payload)
+        details = session.mod_details(args.mod_id) if args.mod_id else {}
+        existing_name = details.get("Name") or None
+        setup = session.setup_for_publish(existing_name)
+        mod_name = existing_name or setup["modName"]
 
-    result = session.publish(
-        {
-            "modName": mod_name,
-            "displayName": args.title,
-            "shortDescription": args.short_description,
-            "longDescription": _read_text(args.description_file),
-            "thumbnail": thumbnail,
-            "screenshotNames": screenshots,
-            "fileName": content,
-            "version": args.version,
-            "gameName": PDX_HEADERS["X-PDX-Game-Name"],
-            "tags": args.tag,
-        },
-        args.mod_id,
-    )
+        thumbnail = session.upload_asset(mod_name, args.thumbnail)
+        screenshots = [session.upload_asset(mod_name, s) for s in args.screenshot]
+        content = session.upload_content(mod_name, args.payload)
+
+        result = session.publish(
+            {
+                "modName": mod_name,
+                "displayName": args.title,
+                "shortDescription": args.short_description,
+                "longDescription": _read_text(args.description_file),
+                "thumbnail": thumbnail,
+                "screenshotNames": screenshots,
+                "fileName": content,
+                "version": args.version,
+                "gameName": PDX_HEADERS["X-PDX-Game-Name"],
+                "tags": args.tag,
+            },
+            args.mod_id,
+        )
+    except PdxError as exc:
+        session.report.publish(title, args.result_json)
+        # Content already on the server but never published leaves an orphan the
+        # next attempt will replace - worth saying so rather than leaving it to
+        # be discovered.
+        partial = session.report.reached("upload_content")
+        print(f"\nFAILED at step '{exc.step}'"
+              + (f" (HTTP {exc.status})" if exc.status else "")
+              + f": {exc}", file=sys.stderr)
+        if partial:
+            print("The payload was uploaded but never published. Nothing is live; "
+                  "re-running replaces it.", file=sys.stderr)
+        return 5 if partial else 1
+
+    session.report.publish(title, args.result_json)
+    print("\npublished successfully")
     print(json.dumps(result, indent=2))
     return 0
 
@@ -348,6 +510,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env", choices=sorted(HOSTS), default="prod")
     parser.add_argument("--dry-run", action="store_true",
                         help="verify credentials, payload and signing without sending anything")
+    parser.add_argument("--result-json", default="publish-result.json",
+                        help="where to write the machine-readable outcome")
     args = parser.parse_args(argv)
 
     if args.dry_run:
@@ -363,11 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 3
 
-    try:
-        return publish_mod(args)
-    except PdxError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+    return publish_mod(args)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ on:
 
 permissions:
   contents: read
+  issues: write   # a failed publish opens an issue; see the last step
 
 concurrency:
   group: publish
@@ -105,4 +106,37 @@ jobs:
         if: always()
         with:
           name: smrcf-payload
-          path: dist/SMRCF.zip
+          path: |
+            dist/SMRCF.zip
+            publish-result.json
+
+      # The person who tagged may not be watching Actions, and with everyone
+      # able to tag it may not even be the person who wrote the fix. Put the
+      # failure somewhere the whole org sees, carrying the step and the server's
+      # own message.
+      - name: Open an issue if publishing failed
+        if: failure() && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          step=$(python -c "import json;print(json.load(open('publish-result.json'))['failed_step'])" 2>/dev/null || echo unknown)
+          status=$(python -c "import json;print(json.load(open('publish-result.json'))['status'] or '-')" 2>/dev/null || echo -)
+          message=$(python -c "import json;print(json.load(open('publish-result.json'))['message'])" 2>/dev/null || echo "see the run log")
+          gh issue create \
+            --title "Publishing $GITHUB_REF_NAME failed at $step" \
+            --label publish-failure \
+            --body "$(cat <<EOF
+          Publishing \`$GITHUB_REF_NAME\` to Paradox Mods failed.
+
+          | | |
+          |---|---|
+          | Step | \`$step\` |
+          | HTTP status | $status |
+          | Message | $message |
+          | Run | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID |
+          | Tagged by | @$GITHUB_ACTOR |
+
+          Nothing is live. Fix the cause, then re-tag with a higher \`'version'\`
+          in metadata.lua. The per-step table is in the run summary.
+          EOF
+          )"
