@@ -3,13 +3,15 @@ name: Publish to Paradox Mods
 # Packs the mod payload and publishes it over the Paradox Mods HTTP API, with no
 # game install involved. Runs on a version tag, or on demand.
 #
-# INCOMPLETE until the routes in tools/publish/pdx_client.py are filled from one
-# capture run - see tools/publish/PDX_API_NOTES.md. Until then the publish step
-# exits 3 with the list of routes it still needs, and nothing is sent.
+# Authentication is the PDX_REFRESH repository secret: a Paradox refresh token,
+# exchanged for a session token at the start of every run. No password is
+# stored. Note that any organisation member who can push a workflow can read
+# that secret, so it should belong to a dedicated publishing account.
 #
-# Credentials come from repository secrets PDX_USER and PDX_PASS. Note that any
-# organisation member who can push a workflow can read those secrets, so use a
-# dedicated publishing account rather than a personal one.
+# The mod page's own text - display name, short and long description - is read
+# back from Paradox and republished unchanged, because the service requires all
+# three on every version and would otherwise blank them. Edit the page on
+# Paradox, not here.
 
 on:
   push:
@@ -17,12 +19,15 @@ on:
   workflow_dispatch:
     inputs:
       env:
+        # The other hosts the SDK names have never answered for this game, so
+        # prod is the only one a rehearsal can use. Dry run is the safety net
+        # instead: it sends nothing at all.
         description: Which Paradox environment to publish to
         type: choice
-        options: [sandbox, prod]
-        default: sandbox
+        options: [prod, sandbox]
+        default: prod
       dry_run:
-        description: Verify packing, secrets and signing without sending anything
+        description: Verify packing, secrets and the payload without sending anything
         type: boolean
         default: true
 
@@ -98,12 +103,15 @@ jobs:
           # Refresh-token auth: no password, no salt. See tools/publish/HANDOFF.md.
           PDX_REFRESH: ${{ secrets.PDX_REFRESH }}
         run: |
+          # Deliberately no --title, --short-description or --description-file:
+          # omitting them republishes what the mod page already shows. Passing
+          # them would overwrite the page from this repository every release.
+          changelog=$(sed -n "s/.*'last_changes', \"\(.*\)\",/\1/p" metadata.lua | head -n 1)
+          echo "changelog entry: $changelog"
           python tools/publish/pdx_client.py \
             --payload dist/SMRCF.zip \
             --thumbnail Images/smr_community_fixes.jpg \
-            --title "SMR Community Fixes" \
-            --short-description "A community-maintained collection of bug fixes for Surviving Mars: Relaunched." \
-            --changelog "$(sed -n "s/.*'last_changes', \"\(.*\)\",/\1/p" metadata.lua | head -n 1)" \
+            --changelog "$changelog" \
             --version "$VERSION" \
             --mod-id "$PDX_MOD_ID" \
             --env "${{ inputs.env || 'prod' }}" \

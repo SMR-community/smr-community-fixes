@@ -4,20 +4,23 @@ Findings from static analysis of `PDXSDK.dll` (2.6 MB, shipped in the game root)
 and the game's own Lua, for the purpose of publishing **this mod**, from **your
 own account**, without opening the game.
 
-**Status: incomplete.** Everything below is confirmed. The request routes are
-not, and cannot be recovered from strings — see *What is still missing*. The
-client in `pdx_client.py` is complete except for those routes, and refuses to
-run until they are supplied.
+**Status: complete and verified against the live service.** Every route, header
+and required field below was exercised for real. The only call never run to
+completion is the final version PUT, whose body was validated by the service
+(it accepted the fields and then failed on a deliberately nonexistent mod id).
 
 Files here:
 
 ```text
-pdx_client.py      the client: Hawk signing, the upload sequence, per-step
+pdx_client.py      the client: session renewal, the upload sequence, per-step
                    reporting, retry of transient failures only
 capture.py         one command: capture the routes and finish the client
 capture_routes.py  the mitmproxy addon capture.py drives
 finish_routes.py   turns a capture into a filled-in ROUTES table
 ```
+
+The three capture files are only needed if Paradox changes the API. See
+*Afterwards: delete the capture tooling*.
 
 **Only the capture needs the game.** `pdx_client.py` speaks HTTP and nothing
 else — it runs on a hosted Linux runner with no game, no SDK and no Paradox
@@ -65,27 +68,37 @@ https://test-api.paradox-interactive.com       test
 
 Telemetry hosts exist alongside each and are irrelevant here.
 
-## Authentication: Hawk
+## Authentication: a JSON Authorization header, not Hawk
 
-The SDK carries `AuthorizationHawk`, `AuthorizationSession`, `AuthorizationSteam`
-and `AuthorizationRenewal` types, plus a literal `Authorization` header name and
-`refresh_token`. So: log in with account credentials, receive a session, and sign
-each subsequent request with [Hawk](https://github.com/mozilla/hawk) — an HMAC
-scheme over a normalised request string, not a bearer token.
-
-`pdx_client.py` implements Hawk signing in full (`hawk_header`). It is a public
-specification, so this part needs no discovery:
+The DLL carries `AuthorizationHawk`, `AuthorizationSession`, `AuthorizationSteam`
+and `AuthorizationRenewal` types, which reads like Hawk request signing. It is
+not. **There is no HMAC anywhere.** The `Authorization` header is a JSON object
+whose single key names the scheme:
 
 ```
-hawk.1.header \n ts \n nonce \n METHOD \n path \n host \n port \n payload-hash \n ext \n
+{"hawk":{"email":…,"sha256(password+salt)":…}}   password login (unusable, see below)
+{"renewal":{"token":"<refresh token>"}}          exchange a refresh token
+{"session":{"token":"<session token>"}}          every other call
 ```
 
-signed with HMAC-SHA256 and sent as
-`Authorization: Hawk id="…", ts="…", nonce="…", hash="…", mac="…"`.
+So `"hawk"` is only the key name of the password-login object, and the login hash
+is not a signature.
+
+**The password path cannot be reproduced off the machine that logged in.** Login
+sends `sha256(password + salt)` where the salt is a per-account random value:
+it never crosses the wire (a cold-start capture shows no salt fetch before
+login), it is not in the SDK's on-disk store, and 40+ candidate constructions
+failed to reproduce a captured hash. It is computed inside `PDXSDK.dll`. Do not
+pursue it — use a refresh token, which is what the client does.
+
+The refresh token is in
+`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json` as `refreshToken`.
+It does **not** rotate on renewal, so it can be stored once as the `PDX_REFRESH`
+secret; it does change if you log out and back in.
 
 ## Required headers
 
-Literal in the DLL:
+Literal in the DLL, and sent on every api-host call:
 
 ```
 X-PDX-Game-Name      X-PDX-Game-Version    X-PDX-Platform
@@ -93,6 +106,24 @@ X-PDX-SDK-Type       X-PDX-SDK-Version     X-PDX-Error-Version
 ```
 
 Content types in use: `application/json`, `application/octet-stream`.
+
+### `x-accept-version` is per-endpoint, and this one wastes an afternoon
+
+Its value is a **bare integer**, and each endpoint is versioned separately:
+
+| Call | Value | Wrong value gives |
+|---|---|---|
+| `PUT /accounts/sessions/{game}` (renew) | header omitted | — |
+| `GET /mods` | `1` (or omitted) | `2` returns 200 with an **empty** `modDetail` |
+| `POST /mods/presigned-urls` | `2` | `1` returns **404** |
+| `PUT /mods/{modId}/versions` | `2` | `1` returns **404** |
+
+Two traps. A malformed value (`2.0`, `v2`, a date) is rejected as
+`invalid-api-version`, which is at least honest. But a *well-formed* value for
+the wrong endpoint returns a bare `404 not-found`, which reads as a route that
+does not exist — so a correct route can look permanently missing because of a
+header. And version `2` of `GET /mods` answers `200` with nothing in it, so it
+fails silently rather than loudly.
 
 ## JSON field names
 
@@ -107,11 +138,69 @@ game           gameName       gameNames       version
 session        sessionToken   refresh_token   userAgent
 ```
 
-## What is still missing
+## The protocol, verified
 
-**The routes.** Paths are assembled at runtime rather than stored, so no amount
-of string extraction yields them. One capture run against the real service
-supplies every one of them at once.
+Host `https://api.paradox-interactive.com`. Five calls, in this order:
+
+```
+1. renew     PUT  /accounts/sessions/surviving_mars_relaunched   no api version
+             Authorization: {"renewal":{"token":"<refresh>"}}, empty body
+             -> {"session":{"token":"<uuid>",…}}     no new refresh token
+
+2. read      GET  /mods?arch=Any&modId=154004&os=Windows         api version 1
+             -> {"result":"OK","modDetail":{…}}
+             modDetail.name is the mod's UUID, needed as `modName` below.
+             It is NOT `modName` or `Name` at the top level.
+
+3. presign   POST /mods/presigned-urls                           api version 2
+             {"fileName":…,"gameName":…,"modName":<uuid>}
+             -> {"presignedUrl","contentType","fileName","modName"}
+             Once per file: thumbnail, then the content zip.
+
+4. upload    PUT  <presignedUrl>            (S3; no PDX headers, no auth)
+             raw bytes, Content-Type from the presign reply.
+
+5. publish   PUT  /mods/154004/versions                          api version 2
+             -> {"modId","version","state","result"}
+
+   logout (optional)  DELETE /accounts/sessions/surviving_mars_relaunched
+```
+
+### What the version PUT requires
+
+Exactly six fields are mandatory. The service validates them one at a time, and
+**validates before it looks the mod up** — so the full set can be discovered
+safely against a nonexistent mod id, which is how this list was obtained:
+
+```
+displayName        shortDescription   longDescription
+contentFileName    changelogEntry     recommendedGameVersion
+```
+
+Everything else is optional: `thumbnail`, `tags`, `userModVersion`, `arch`,
+`os`, `acl`.
+
+Three of the six are the mod page's own text. That means **every publish
+rewrites the page's description**, and a client that does not supply it blanks
+it. `pdx_client.py` therefore reads the mod (step 2) and sends those values
+back unchanged unless explicitly overridden. The optional fields are echoed back
+for the same reason rather than assumed — the live mod is `arch: Any, os: Any`,
+so hardcoding `os: Windows` would have narrowed it.
+
+`longDescription` is HTML (`<p>`, `<strong>`, `<a>`, `<ol>`), not the plain text
+in `metadata.lua`, and it contains wording that exists only on the mod page.
+
+### Error shape
+
+```json
+{"result":"Failure","errorCode":"bad-input",
+ "errorMessage":"recommendedGameVersion: Must be set","detail":""}
+```
+
+`result` is always the word `Failure`; `errorMessage` is the part worth reading.
+A client that reports `result` says nothing useful.
+
+## Re-capturing, if Paradox changes the API
 
 There is no certificate pinning in the DLL — the only TLS-adjacent string is an
 OpenSSL path from the bundled PGP library — so an intercepting proxy works.
@@ -131,11 +220,17 @@ press Ctrl+C, and it fills in `ROUTES`. Confirm with a dry run:
 
 ```
 python tools/publish/pdx_client.py --dry-run --payload dist/SMRCF.zip \
-    --thumbnail Images/smr_community_fixes.jpg --version 1
+    --thumbnail Images/smr_community_fixes.jpg --version 1 --mod-id 154004 \
+    --changelog "rehearsal"
 ```
 
 Only shape is recorded — method, path, header names and body field names. Values,
 including your password, are redacted before anything reaches disk.
+
+A capture records header *names*, so it will show that `x-accept-version` was
+sent but not which integer. Recover the value the way it was found the first
+time: call `GET /mods` with candidate values, since anything malformed comes
+back as `invalid-api-version` and a valid one returns `200`.
 
 The mod already exists as
 [154004](https://mods.paradoxplaza.com/mods/154004/Any), so capturing one
@@ -147,11 +242,14 @@ Everything else must be filled.
 
 ### Afterwards: delete the capture tooling
 
-Once `ROUTES` is filled and a sandbox publish has worked, **delete
-`capture.py`, `capture_routes.py`, `finish_routes.py` and `routes.json`**. They
-exist for one afternoon's work and are dead weight after it. This file is the
-record; the section below is enough to rebuild them if Paradox ever changes the
-API.
+Once a publish has actually succeeded, **delete `capture.py`,
+`capture_routes.py`, `finish_routes.py` and `routes.json`**. They exist for one
+afternoon's work and are dead weight after it. This file is the record; the
+section above is enough to rebuild them if Paradox ever changes the API.
+
+There is no usable sandbox for this game — the non-production hosts named in the
+DLL have never answered — so the first real publish is the only end-to-end test
+there is.
 
 ### Rebuilding the capture by hand
 
@@ -212,10 +310,11 @@ Undo the proxy and CA changes afterwards.
 * **Undocumented and unsupported.** Paradox publishes no API contract. Any
   change on their side breaks this with no notice and no deprecation period.
   Check their terms before relying on it.
-* **Credentials in GitHub Secrets are readable by every organisation member.**
-  Anyone who can push a workflow can print a secret. Membership of
-  SMR-community is open by invitation and every member can push to `main`, so
-  the Paradox account stored there is effectively shared with all of them. Use a
-  dedicated publishing account that owns nothing else.
-* **Server-side rate limits and lockouts** apply to password login. A workflow
-  that retries on failure can lock the account.
+* **Secrets are readable by every organisation member.** Anyone who can push a
+  workflow can print a secret. Membership of SMR-community is open by invitation
+  and every member can push to `main`, so `PDX_REFRESH` is effectively shared
+  with all of them. It is a refresh token rather than a password, so it is
+  revocable — logging out in the game invalidates it — but it still grants
+  publishing rights to the account. Use a dedicated publishing account.
+* **The token expires eventually.** A publish that fails at `renew` with a 401
+  needs a fresh `refreshToken` from `account.json` and a new `gh secret set`.

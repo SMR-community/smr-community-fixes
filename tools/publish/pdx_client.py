@@ -4,7 +4,8 @@ The protocol was recovered by capturing the game's own traffic (see
 PDX_API_NOTES.md and HANDOFF.md). The real upload is:
 
     establish session   (refresh token -> session token)
-    GET  /mods?modId=…                      current mod state, gives modName
+    GET  /mods?modId=…                      current mod state; its `name` is the
+                                            mod UUID the presign calls need
     POST /mods/presigned-urls   x2          one per file: thumbnail, content zip
     PUT  <presignedUrl>         x2          raw bytes to a storage host
     PUT  /mods/{modId}/versions             publish the new version
@@ -23,12 +24,19 @@ Usage:
 
 Standard library only.
 
-Remaining unknowns, each marked TODO(capture) below, resolved by one more
-capture that records request/response *bodies* (values, not just field names):
-  * the renewal route and its exact request shape (ROUTES["renew"]);
-  * the value of the x-accept-version header (ACCEPT_VERSION);
-  * the acl / recommendedGameVersion values in the version PUT.
-Until ROUTES["renew"] is filled the client stops cleanly at session setup.
+Every route, header and field below was checked against the live service. Two
+details cost the most to find, so they are stated plainly:
+
+  * `x-accept-version` is per-endpoint and its value is a bare integer. Reading
+    a mod is version 1; presigning and publishing are version 2. A malformed
+    value is rejected as `invalid-api-version`, and a well-formed value for the
+    wrong endpoint returns 404 - which reads as a missing route rather than a
+    wrong header, so it is worth being sure which is which.
+  * The version PUT requires displayName, shortDescription, longDescription,
+    contentFileName, changelogEntry and recommendedGameVersion. The mod page's
+    own text is therefore mandatory on every publish, so it is read back from
+    the service first and sent unchanged unless explicitly overridden. Building
+    it from local files instead would rewrite the page each release.
 """
 
 from __future__ import annotations
@@ -41,9 +49,11 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlencode
 
+# Named in PDXSDK.dll. Only prod has ever answered for this game, so there is no
+# sandbox to rehearse against; --dry-run is the rehearsal.
 HOSTS = {
     "prod": "https://api.paradox-interactive.com",
     "sandbox": "https://sandbox-api.paradox-interactive.com",
@@ -63,29 +73,34 @@ PDX_HEADERS = {
     "X-PDX-Error-Version": "2",
 }
 
-# TODO(capture): the presigned-urls and versions calls also sent an
-# `x-accept-version` header. Its value was redacted; "2.0" is a guess. Confirm
-# from a body-level capture, or the version PUT may 400.
-ACCEPT_VERSION = "2.0"
 
-# Routes recovered from the capture. Each is (METHOD, PATH); {placeholders} are
-# filled per call. `renew` is the one still unknown - see module docstring.
-ROUTES: dict[str, tuple[str, str] | None] = {
-    # Confirmed live: PUT with Authorization {"renewal":{"token":<refresh>}} and
-    # no body returns {"session":{"token":<session>,…}}. The response carries no
-    # new refresh token, so the stored one does not rotate.
-    "renew": ("PUT", "/accounts/sessions/" + GAME_NAME),
-    "logout": ("DELETE", "/accounts/sessions/" + GAME_NAME),
-    "mod_details": ("GET", "/mods"),                     # + ?arch=&modId=&os=
-    "presign": ("POST", "/mods/presigned-urls"),
-    "publish_version": ("PUT", "/mods/{mod_id}/versions"),
+class Route(NamedTuple):
+    method: str
+    path: str
+    # Value for the `x-accept-version` header; None omits it. Each endpoint is
+    # versioned on its own: /mods answers version 1 and returns an empty record
+    # for version 2, while presign and versions answer 2 and 404 for 1.
+    api_version: str | None
+
+
+ROUTES: dict[str, Route] = {
+    # PUT with Authorization {"renewal":{"token":<refresh>}} and no body returns
+    # {"session":{"token":<session>,…}}. No new refresh token comes back, so the
+    # stored one does not rotate.
+    "renew": Route("PUT", "/accounts/sessions/" + GAME_NAME, None),
+    "logout": Route("DELETE", "/accounts/sessions/" + GAME_NAME, None),
+    "mod_details": Route("GET", "/mods", "1"),           # + ?arch=&modId=&os=
+    "presign": Route("POST", "/mods/presigned-urls", "2"),
+    "publish_version": Route("PUT", "/mods/{mod_id}/versions", "2"),
 }
 
-DEFAULT_ARCH = "Any"
-DEFAULT_OS = "Windows"
-# TODO(capture): acl and recommendedGameVersion values were redacted. These are
-# reasonable defaults; confirm against a captured version PUT body.
-DEFAULT_ACL = "public"
+# These only narrow the mod *read*. What gets published keeps whatever arch and
+# os the mod already carries, which is not necessarily either of these.
+QUERY_ARCH = "Any"
+QUERY_OS = "Windows"
+
+# The one required field with no counterpart in the mod record, so it cannot be
+# read back and has to be stated here.
 DEFAULT_RECOMMENDED_GAME_VERSION = "1.0.7"
 
 
@@ -98,10 +113,6 @@ class PdxError(RuntimeError):
         self.step = step
         self.status = status
         self.retryable = retryable
-
-
-def missing_routes() -> list[str]:
-    return sorted(name for name, route in ROUTES.items() if route is None)
 
 
 # --------------------------------------------------------------------------
@@ -186,7 +197,13 @@ def server_message(raw: bytes) -> str:
     except (ValueError, UnicodeDecodeError):
         return text[:300]
     if isinstance(data, dict):
-        # Confirmed error shape: {"error":{"detail":…,"category":…}, …}
+        # The service's own shape. `errorMessage` carries the part worth reading
+        # ("recommendedGameVersion: Must be set"), while `result` is always the
+        # word "Failure" and says nothing.
+        named = [data.get(key) for key in ("errorMessage", "errorCode", "detail")]
+        useful = [value for value in named if isinstance(value, str) and value]
+        if useful:
+            return " / ".join(dict.fromkeys(useful))[:300]
         error = data.get("error")
         if isinstance(error, dict):
             for key in ("detail", "message", "category", "subCategory"):
@@ -248,11 +265,12 @@ class PdxSession:
         except json.JSONDecodeError:
             return raw
 
-    def _call(self, step: str, method: str, url: str, *, body: bytes = b"",
-              content_type: str = "", headers: dict[str, str] | None = None) -> Any:
+    def _call(self, step: str, method: str, url: str, *,
+              headers: dict[str, str], body: bytes = b"",
+              content_type: str = "") -> Any:
         """One reported, retried step against a full URL."""
         started = time.monotonic()
-        hdrs = headers if headers is not None else self._api_headers()
+        hdrs = headers
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 result = self._send_once(method, url, body=body,
@@ -277,21 +295,23 @@ class PdxSession:
             return result
         raise AssertionError("unreachable")
 
-    def _api_headers(self) -> dict[str, str]:
+    def _api_headers(self, api_version: str | None) -> dict[str, str]:
         headers = dict(PDX_HEADERS)
         headers["Authorization"] = self.auth.header()
-        headers["x-accept-version"] = ACCEPT_VERSION
+        if api_version is not None:
+            headers["x-accept-version"] = api_version
         return headers
 
-    def _api(self, step: str, route: str, *, json_body: dict | None = None,
+    def _api(self, step: str, route_name: str, *, json_body: dict | None = None,
              query: dict | None = None, **fmt) -> Any:
-        method, path = _route(route)
-        url = self.base + path.format(**fmt)
+        route = _route(route_name)
+        url = self.base + route.path.format(**fmt)
         if query:
             url += "?" + urlencode(query)
         body = json.dumps(json_body).encode() if json_body is not None else b""
-        return self._call(step, method, url, body=body,
-                          content_type="application/json" if json_body is not None else "")
+        return self._call(step, route.method, url, body=body,
+                          content_type="application/json" if json_body is not None else "",
+                          headers=self._api_headers(route.api_version))
 
     # -- API surface -------------------------------------------------------
 
@@ -304,18 +324,26 @@ class PdxSession:
         comes back, so the stored one is reused unchanged.
         """
         self.auth.refresh_token = refresh_token
-        method, path = _route("renew")
+        route = _route("renew")
         headers = dict(PDX_HEADERS)
         headers["Authorization"] = json.dumps({"renewal": {"token": refresh_token}})
-        data = self._call("renew", method, self.base + path, headers=headers)
+        data = self._call("renew", route.method, self.base + route.path,
+                          headers=headers)
         token = (data or {}).get("session", {}).get("token")
         if not token:
             raise PdxError("renew", "renewal returned no session token")
         self.auth.session_token = token
 
     def mod_details(self, mod_id: int) -> dict:
-        return self._api("mod_details", "mod_details",
-                         query={"arch": DEFAULT_ARCH, "modId": mod_id, "os": DEFAULT_OS}) or {}
+        """The mod as the service currently holds it, out of its envelope.
+
+        The reply is {"result":"OK","modDetail":{…}}, and everything a republish
+        has to preserve lives in modDetail.
+        """
+        reply = self._api("mod_details", "mod_details",
+                          query={"arch": QUERY_ARCH, "modId": mod_id,
+                                 "os": QUERY_OS}) or {}
+        return reply.get("modDetail") or {}
 
     def presign(self, mod_name: str, file_name: str) -> dict:
         """Ask for a presigned upload URL for one file."""
@@ -335,11 +363,10 @@ class PdxSession:
                          json_body=body, mod_id=mod_id)
 
 
-def _route(name: str) -> tuple[str, str]:
+def _route(name: str) -> Route:
     route = ROUTES.get(name)
     if route is None:
-        raise PdxError(name, f"route '{name}' is not known yet. One capture of a "
-                             f"session renewal fills it - see HANDOFF.md.")
+        raise PdxError(name, f"no route named '{name}'")
     return route
 
 
@@ -353,10 +380,65 @@ def _read(path: str) -> bytes:
 # --------------------------------------------------------------------------
 
 
+def version_body(args: argparse.Namespace, live: dict, thumb: dict,
+                 content: dict) -> dict:
+    """The body of the version PUT, defaulting to what the page already shows.
+
+    The service makes the page's own text mandatory on every publish, so a
+    release that only means to ship new code still has to restate the
+    description, and anything left blank here would be published as blank. Each
+    such field therefore falls back to the value just read from the service, and
+    only an explicit argument replaces it.
+    """
+    display_name = args.title or live.get("displayName") or ""
+    short_description = args.short_description or live.get("shortDescription") or ""
+    long_description = (_read_text(args.description_file)
+                        or live.get("longDescription") or "")
+
+    empty = [name for name, value in (
+        ("displayName", display_name),
+        ("shortDescription", short_description),
+        ("longDescription", long_description),
+        ("changelogEntry", args.changelog),
+    ) if not value.strip()]
+    if empty:
+        raise PdxError(
+            "publish_version",
+            "the service requires " + ", ".join(empty) + ", and neither the "
+            "command line nor the current mod record supplies one. Publishing "
+            "now would blank it on the mod page.")
+
+    return {
+        "contentFileName": content["fileName"],
+        "thumbnail": thumb["fileName"],
+        "displayName": display_name,
+        "shortDescription": short_description,
+        "longDescription": long_description,
+        "changelogEntry": args.changelog,
+        "recommendedGameVersion": args.recommended_game_version,
+        "userModVersion": str(args.version),
+        # Optional to send, but echoed back rather than assumed: the mod is
+        # published for every arch and os, and naming one here would quietly
+        # narrow it.
+        "tags": args.tag or live.get("tags") or [],
+        "arch": live.get("arch") or "Any",
+        "os": live.get("os") or "Any",
+        "acl": live.get("acl") or "public",
+    }
+
+
 def publish_mod(args: argparse.Namespace) -> int:
     refresh = os.environ.get("PDX_REFRESH")
     if not refresh:
         print("error: set PDX_REFRESH (the Paradox account refresh token)", file=sys.stderr)
+        return 2
+
+    # Checked here rather than at the version PUT, which happens after both
+    # uploads: there is no reason to spend them on a release the service will
+    # reject for a missing changelog.
+    if not args.changelog.strip():
+        print("error: --changelog is required; the service rejects a version "
+              "without a changelog entry", file=sys.stderr)
         return 2
 
     session = PdxSession(HOSTS[args.env])
@@ -365,8 +447,8 @@ def publish_mod(args: argparse.Namespace) -> int:
     try:
         session.establish_session(refresh)
 
-        details = session.mod_details(args.mod_id)
-        mod_name = details.get("Name") or details.get("modName")
+        live = session.mod_details(args.mod_id)
+        mod_name = live.get("name")
         if not mod_name:
             raise PdxError("mod_details", f"mod {args.mod_id} returned no name")
 
@@ -382,20 +464,8 @@ def publish_mod(args: argparse.Namespace) -> int:
         session.upload_to_storage("upload_content", content["presignedUrl"],
                                   _read(args.payload), content.get("contentType", ""))
 
-        result = session.publish_version(args.mod_id, {
-            "contentFileName": content["fileName"],
-            "thumbnail": thumb["fileName"],
-            "displayName": args.title,
-            "shortDescription": args.short_description,
-            "longDescription": _read_text(args.description_file),
-            "changelogEntry": args.changelog,
-            "tags": args.tag,
-            "userModVersion": str(args.version),
-            "arch": DEFAULT_ARCH,
-            "os": DEFAULT_OS,
-            "acl": DEFAULT_ACL,
-            "recommendedGameVersion": DEFAULT_RECOMMENDED_GAME_VERSION,
-        })
+        result = session.publish_version(
+            args.mod_id, version_body(args, live, thumb, content))
     except PdxError as exc:
         session.report.publish(title, args.result_json)
         partial = session.report.reached("upload_content")
@@ -439,12 +509,17 @@ def preflight(args: argparse.Namespace) -> int:
         else:
             print(f"  ok      {label} {path} ({os.path.getsize(path)} bytes)")
 
-    unknown = missing_routes()
-    print(f"  {'ok     ' if not unknown else 'PENDING'} routes: "
-          + ("all known" if not unknown else f"{len(unknown)} unknown - " + ", ".join(unknown)))
+    # Required by the service on every publish, and the one such field with no
+    # value on the mod page to fall back to.
+    if args.changelog.strip():
+        print(f"  ok      changelog entry {args.changelog[:60]!r}")
+    else:
+        print("  MISSING changelog entry (--changelog): the service rejects a "
+              "version without one")
+        ok = False
 
-    print("\ndry run complete: " + ("ready to publish" if ok and not unknown
-                                    else "plumbing verified; capture the renewal route to go live"))
+    print("\ndry run complete: "
+          + ("ready to publish" if ok else "not ready, see above"))
     return 0 if ok else 1
 
 
@@ -459,10 +534,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Publish the mod to Paradox Mods.")
     parser.add_argument("--payload", required=True, help="packed mod archive")
     parser.add_argument("--thumbnail", required=True, help="cover image, max 2 MB")
-    parser.add_argument("--title", default="SMR Community Fixes")
+    # Each of these overrides what the mod page already shows. Left unset, the
+    # current value is read from the service and republished unchanged.
+    parser.add_argument("--title", default="")
     parser.add_argument("--short-description", default="")
     parser.add_argument("--description-file")
     parser.add_argument("--changelog", default="")
+    parser.add_argument("--recommended-game-version",
+                        default=DEFAULT_RECOMMENDED_GAME_VERSION)
     parser.add_argument("--version", type=int, required=True)
     parser.add_argument("--mod-id", type=int, required=True)
     parser.add_argument("--tag", action="append", default=[])
@@ -473,12 +552,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         return preflight(args)
-
-    unknown = missing_routes()
-    if unknown:
-        print("error: unknown routes: " + ", ".join(unknown)
-              + "\nCapture a session renewal to fill them. See HANDOFF.md.", file=sys.stderr)
-        return 3
 
     return publish_mod(args)
 

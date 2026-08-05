@@ -106,8 +106,12 @@ Players get the mod from Paradox Mods, and that page is updated from GitHub, not
 from the game's Mod Editor. `PDX_Upload` in the game is a driver over native
 functions in `PDXSDK.dll`, so nothing can be reused from Lua and no hosted runner
 can run it; `tools\publish\pdx_client.py` therefore talks to the service
-directly, signing each request with Hawk and authenticating with the `PDX_USER`
-and `PDX_PASS` repository secrets.
+directly. Requests carry `Authorization: {"session":{"token":…}}` — a JSON
+object, not a scheme string — and that session token is obtained at the start of
+each run by exchanging the `PDX_REFRESH` repository secret at the renewal
+endpoint. There is no password anywhere: the game's own login hashes it with a
+per-account salt held inside `PDXSDK.dll` and never written to disk, so it
+cannot be reproduced off the machine that logged in.
 
 Merging never publishes. Pushing a `v*` tag runs `publish.yml`, which:
 
@@ -120,15 +124,24 @@ Merging never publishes. Pushing a `v*` tag runs `publish.yml`, which:
    attempts.
 
 Timeouts, connection errors, `429` and `5xx` retry with backoff; `4xx` never
-does, because retrying a rejected password locks the account. A failed tag opens
+does, since a rejected request is wrong rather than unlucky. A failed tag opens
 an issue naming the step, the status and the server's message. Exit codes
-distinguish a fatal error, missing credentials, unknown routes, and a failure
-after the payload uploaded but before it went live.
+distinguish a fatal error, a missing secret or changelog, and a failure after the
+payload uploaded but before it went live.
 
-The API is undocumented, so the request routes come from one capture run against
-the real service; `tools\publish\PDX_API_NOTES.md` records what is known and
-reduces the capture to a single command. Until those routes are filled the
-publish step stops cleanly and sends nothing.
+The service requires `displayName`, `shortDescription` and `longDescription` on
+every version, so a release that only ships new code still has to restate the
+page's wording. The client reads the mod first and sends those values back
+unchanged; publishing therefore cannot quietly blank the page, and the page's
+text stays editable on Paradox rather than being owned by this repository.
+
+The API is undocumented, so every route, header and field was recovered by
+capturing the game's traffic and then checked against the live service;
+`tools\publish\PDX_API_NOTES.md` records the result. One detail is worth
+repeating here because it is easy to misread: `x-accept-version` is versioned per
+endpoint, and reading a mod is version `1` while presigning and publishing are
+version `2`. Sending the wrong one returns `404`, which looks like a missing
+route rather than a wrong header.
 
 ## 2. Task type
 

@@ -5,5 +5,10 @@ __pycache__/
 # Captured API traffic. Never commit: header values can contain credentials.
 routes*.json
 
+# Payload and step report from a local publish rehearsal; CI builds its own and
+# uploads them as run artifacts.
+dist/
+publish-result.json
+
 # Local working handoff for the publishing/auth work.
 tools/publish/HANDOFF.md

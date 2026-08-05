@@ -178,8 +178,8 @@ needs no game installed anywhere — it runs on a hosted Linux runner and talks 
 Paradox over HTTP. Merging does not publish. Pushing a version tag does:
 
 ```
-git tag v2
-git push origin v2
+git tag v3
+git push origin v3
 ```
 
 [`publish.yml`](.github/workflows/publish.yml) then checks the payload, refuses
@@ -190,8 +190,14 @@ The tag is only the trigger — the version players see is the integer in
 `metadata.lua`, which CI bumps for you. So several fixes can merge, and you
 publish them together when you choose.
 
-To rehearse, run the workflow from the **Actions** tab: it defaults to sandbox
-with **dry run** on, and sends nothing.
+The mod page's own wording — its title, short description and long description —
+is read back from Paradox and republished unchanged, because the service demands
+all three on every version and would otherwise blank them. Edit that text on the
+mod page itself; this repository only ships code, images and the changelog entry
+(which comes from `'last_changes'` in `metadata.lua`, and cannot be empty).
+
+To rehearse, run the workflow from the **Actions** tab with **dry run** on: it
+packs the payload and checks the secret, and sends nothing.
 
 ### What you get back
 
@@ -200,16 +206,17 @@ summary:
 
 | Step | Result | Status | Time |
 |---|---|---|---|
-| `login` | ✅ | 200 | 180 ms |
-| `setup_publish` | ✅ | 200 | 16 ms |
-| `upload_asset` | ✅ | 200 | 804 ms |
+| `renew` | ✅ | 200 | 658 ms |
+| `mod_details` | ✅ | 200 | 198 ms |
+| `presign` | ✅ | 200 | 172 ms |
+| `upload_thumbnail` | ✅ | 200 | 418 ms |
 | `upload_content` | ❌ | 504 | 20019 ms |
 
 **If it published**, you get a [release](../../releases) for the tag: the mod
 version in the title, a link to the mod page, the commits since the last
 release, and `SMRCF.zip` — the exact payload uploaded — attached to it.
 
-**If it failed**, you get an issue titled `Publishing v2 failed`, saying which
+**If it failed**, you get an issue titled `Publishing v3 failed`, saying which
 step broke, the HTTP status, the server's own message, who tagged and a link to
 the run. Tagging again comments on that same issue rather than opening another,
 and it closes itself once a tag succeeds.
@@ -220,19 +227,21 @@ The exit code says what state things are in:
 |---|---|
 | `0` | published |
 | `1` | failed; nothing was uploaded |
-| `2` | no credentials configured |
-| `3` | the API routes are not captured yet |
+| `2` | `PDX_REFRESH` missing, or no changelog entry to publish |
 | `5` | payload uploaded but never published — not live, re-tagging replaces it |
 
 Network errors, timeouts and 5xx retry four times with backoff before any of
-that. A rejected password does not retry, because repeating one locks the
-account.
+that. A 4xx never retries: it means the request itself was wrong, and repeating
+it only wastes the upload.
+
+If a run fails at `renew` with a 401, the refresh token has expired. Log in once
+in the game, read `refreshToken` from
+`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json`, and replace the
+secret with `gh secret set PDX_REFRESH`. The value is prompted for, so it never
+reaches your shell history.
 
 Anyone who can push can tag. A tag is the one irreversible action here — it
 reaches every subscriber's game.
-
-> **Not live yet:** the upload needs one capture run first, described in
-> `tools/publish/PDX_API_NOTES.md`. Until then the publish step stops cleanly.
 
 ## Test before you submit
 

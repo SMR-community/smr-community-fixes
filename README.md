@@ -104,8 +104,8 @@ nobody needs the game installed to publish.
 Merging does not publish. Pushing a version tag does:
 
 ```
-git tag v2
-git push origin v2
+git tag v3
+git push origin v3
 ```
 
 That packs `metadata.lua`, `items.lua`, `Code/` and `Images/` and uploads them.
