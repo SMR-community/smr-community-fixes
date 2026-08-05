@@ -1,0 +1,70 @@
+name: Publish to Paradox Mods
+
+# Packs the mod payload and publishes it over the Paradox Mods HTTP API, with no
+# game install involved. Runs on a version tag, or on demand.
+#
+# INCOMPLETE until the routes in tools/publish/pdx_client.py are filled from one
+# capture run - see tools/publish/PDX_API_NOTES.md. Until then the publish step
+# exits 3 with the list of routes it still needs, and nothing is sent.
+#
+# Credentials come from repository secrets PDX_USER and PDX_PASS. Note that any
+# organisation member who can push a workflow can read those secrets, so use a
+# dedicated publishing account rather than a personal one.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Which Paradox environment to publish to
+        type: choice
+        options: [sandbox, prod]
+        default: sandbox
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Pack and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The payload is exactly what the game loads: no docs, no templates, no
+      # tools, no workflows. Same rule as section 1 of DESCRIPTION.md.
+      - name: Pack the payload
+        run: |
+          mkdir -p dist
+          zip -r dist/SMRCF.zip metadata.lua items.lua Code Images -x '*.gitkeep'
+          echo "VERSION=$(grep -oP "'version', \K\d+" metadata.lua)" >> "$GITHUB_ENV"
+          ls -l dist/SMRCF.zip
+
+      - name: Publish
+        env:
+          PDX_USER: ${{ secrets.PDX_USER }}
+          PDX_PASS: ${{ secrets.PDX_PASS }}
+        run: |
+          python tools/publish/pdx_client.py \
+            --payload dist/SMRCF.zip \
+            --thumbnail Images/smr_community_fixes.jpg \
+            --screenshot Images/screenshot_01.jpg \
+            --title "SMR Community Fixes" \
+            --short-description "A community-maintained collection of bug fixes for Surviving Mars: Relaunched." \
+            --version "$VERSION" \
+            --env "${{ inputs.env || 'prod' }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smrcf-payload
+          path: dist/SMRCF.zip
