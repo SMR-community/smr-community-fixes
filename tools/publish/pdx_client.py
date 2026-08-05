@@ -1,32 +1,48 @@
 """Publish this mod to Paradox Mods over HTTP, without the game.
 
-Everything here is confirmed against PDXSDK.dll except the routes in ROUTES,
-which are runtime-assembled and must come from one capture run. See
-PDX_API_NOTES.md. The client refuses to run while any route is None, rather than
-guessing and sending a request nobody can predict the effect of.
+The protocol was recovered by capturing the game's own traffic (see
+PDX_API_NOTES.md and HANDOFF.md). The real upload is:
+
+    establish session   (refresh token -> session token)
+    GET  /mods?modId=…                      current mod state, gives modName
+    POST /mods/presigned-urls   x2          one per file: thumbnail, content zip
+    PUT  <presignedUrl>         x2          raw bytes to a storage host
+    PUT  /mods/{modId}/versions             publish the new version
+
+Auth is NOT Hawk request signing (despite the SDK type names). Requests carry
+`Authorization: {"session":{"token":"<uuid>"}}`. The session token is obtained
+from a refresh token via the renewal endpoint — no password, no salt. The
+password login the game uses hashes the password with a per-account salt kept
+inside PDXSDK.dll and never written to disk, so it cannot be reproduced here;
+the refresh token replaces it.
 
 Usage:
-    PDX_USER=... PDX_PASS=... python tools/publish/pdx_client.py --payload dist/SMRCF.zip
+    PDX_REFRESH=<token> python tools/publish/pdx_client.py \\
+        --payload dist/SMRCF.zip --thumbnail Images/cover.jpg \\
+        --version 3 --mod-id 154004
 
 Standard library only.
+
+Remaining unknowns, each marked TODO(capture) below, resolved by one more
+capture that records request/response *bodies* (values, not just field names):
+  * the renewal route and its exact request shape (ROUTES["renew"]);
+  * the value of the x-accept-version header (ACCEPT_VERSION);
+  * the acl / recommendedGameVersion values in the version PUT.
+Until ROUTES["renew"] is filled the client stops cleanly at session setup.
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
-import hmac
 import json
 import os
-import secrets
 import sys
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode
 
 HOSTS = {
     "prod": "https://api.paradox-interactive.com",
@@ -35,10 +51,11 @@ HOSTS = {
     "test": "https://test-api.paradox-interactive.com",
 }
 
-# Sent on every request. Values mirror what the game reports about itself; the
-# service uses them to scope the mod to the right title.
+GAME_NAME = "surviving_mars_relaunched"
+
+# Sent on every api-host request. Confirmed present in the capture.
 PDX_HEADERS = {
-    "X-PDX-Game-Name": "surviving_mars_relaunched",
+    "X-PDX-Game-Name": GAME_NAME,
     "X-PDX-Game-Version": "1.0.7",
     "X-PDX-Platform": "pc",
     "X-PDX-SDK-Type": "cpp",
@@ -46,18 +63,32 @@ PDX_HEADERS = {
     "X-PDX-Error-Version": "2",
 }
 
-# Fill from routes.json after a capture run. Each value is (METHOD, PATH).
-# PATH may contain {placeholders} substituted per call.
+# TODO(capture): the presigned-urls and versions calls also sent an
+# `x-accept-version` header. Its value was redacted; "2.0" is a guess. Confirm
+# from a body-level capture, or the version PUT may 400.
+ACCEPT_VERSION = "2.0"
+
+# Routes recovered from the capture. Each is (METHOD, PATH); {placeholders} are
+# filled per call. `renew` is the one still unknown - see module docstring.
 ROUTES: dict[str, tuple[str, str] | None] = {
-    "login": None,            # account credentials -> session + hawk key
-    "renew": None,            # refresh_token -> new session
-    "mod_details": None,      # {mod_id} -> current published state
-    "setup_publish": None,    # -> {modName, modFolderPath}
-    "upload_asset": None,     # thumbnail / screenshot, octet-stream
-    "upload_content": None,   # the payload archive, octet-stream
-    "publish": None,          # first publication
-    "publish_new_version": None,  # subsequent versions
+    # TODO(capture): refresh token -> session token. The renewal endpoint never
+    # fired in capture because every session was valid. The DLL has an
+    # `AuthorizationRenewal` type and a `renewal` string; expect something like
+    # ("POST", "/accounts/sessions/" + GAME_NAME + "/renew") carrying the
+    # refresh token. Left None so the client stops cleanly here.
+    "renew": None,
+    "logout": ("DELETE", "/accounts/sessions/" + GAME_NAME),
+    "mod_details": ("GET", "/mods"),                     # + ?arch=&modId=&os=
+    "presign": ("POST", "/mods/presigned-urls"),
+    "publish_version": ("PUT", "/mods/{mod_id}/versions"),
 }
+
+DEFAULT_ARCH = "Any"
+DEFAULT_OS = "Windows"
+# TODO(capture): acl and recommendedGameVersion values were redacted. These are
+# reasonable defaults; confirm against a captured version PUT body.
+DEFAULT_ACL = "public"
+DEFAULT_RECOMMENDED_GAME_VERSION = "1.0.7"
 
 
 class PdxError(RuntimeError):
@@ -79,8 +110,8 @@ def missing_routes() -> list[str]:
 # Reporting: which step failed, why, and how long each one took
 # --------------------------------------------------------------------------
 
-# Transient. A timeout is the one failure already seen against this service, on
-# AsyncPdxUploadModContent with a large payload, so content upload is retried.
+# A content-upload timeout is the one transient already seen against this
+# service, so those retry; a 4xx is the caller's fault and never does.
 RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504}
 MAX_ATTEMPTS = 4
 BACKOFF_SECONDS = 3.0
@@ -100,7 +131,7 @@ class StepResult:
         status = str(self.status) if self.status else "-"
         retries = f" after {self.attempts} attempts" if self.attempts > 1 else ""
         detail = f"  {self.message}" if self.message else ""
-        return f"  {mark}  {self.name:<20} {status:>4}  {self.elapsed_ms:>6} ms{retries}{detail}"
+        return f"  {mark}  {self.name:<18} {status:>4}  {self.elapsed_ms:>6} ms{retries}{detail}"
 
 
 class Reporter:
@@ -150,82 +181,25 @@ class Reporter:
 
 
 def server_message(raw: bytes) -> str:
-    """Best-effort human-readable message out of an error body.
-
-    The SDK sends X-PDX-Error-Version: 2, so responses are structured, but the
-    field names are unknown until a real error is captured. Try the usual
-    candidates, fall back to raw text.
-    """
+    """Best-effort human-readable message out of an error body."""
     text = raw.decode("utf-8", "replace").strip()
     try:
         data = json.loads(text)
     except (ValueError, UnicodeDecodeError):
         return text[:300]
     if isinstance(data, dict):
-        for key in ("message", "error_description", "error", "detail", "title", "reason"):
+        # Confirmed error shape: {"error":{"detail":…,"category":…}, …}
+        error = data.get("error")
+        if isinstance(error, dict):
+            for key in ("detail", "message", "category", "subCategory"):
+                value = error.get(key)
+                if isinstance(value, str) and value:
+                    return value[:300]
+        for key in ("message", "detail", "error_description", "result"):
             value = data.get(key)
             if isinstance(value, str) and value:
                 return value[:300]
-        errors = data.get("errors")
-        if isinstance(errors, list) and errors:
-            return str(errors[0])[:300]
     return text[:300]
-
-
-# --------------------------------------------------------------------------
-# Hawk request signing (https://github.com/mozilla/hawk)
-# --------------------------------------------------------------------------
-
-
-@dataclass
-class Credentials:
-    """A Hawk credential pair plus the session tokens issued at login."""
-
-    id: str
-    key: str
-    algorithm: str = "sha256"
-    session_token: str | None = None
-    refresh_token: str | None = None
-
-
-def payload_hash(body: bytes, content_type: str) -> str:
-    """Hawk payload hash: base64(sha256("hawk.1.payload\\n<type>\\n<body>\\n"))."""
-    normalized = b"hawk.1.payload\n" + content_type.encode() + b"\n" + body + b"\n"
-    return base64.b64encode(hashlib.sha256(normalized).digest()).decode()
-
-
-def hawk_header(
-    creds: Credentials,
-    method: str,
-    url: str,
-    body: bytes = b"",
-    content_type: str = "",
-    ext: str = "",
-) -> str:
-    parts = urlsplit(url)
-    port = parts.port or (443 if parts.scheme == "https" else 80)
-    path = parts.path + (f"?{parts.query}" if parts.query else "")
-    ts = str(int(time.time()))
-    nonce = secrets.token_urlsafe(6)
-    hash_value = payload_hash(body, content_type) if body else ""
-
-    normalized = (
-        "hawk.1.header\n"
-        f"{ts}\n{nonce}\n{method.upper()}\n{path}\n"
-        f"{parts.hostname}\n{port}\n{hash_value}\n{ext}\n"
-    )
-    digest = hmac.new(
-        creds.key.encode(), normalized.encode(), getattr(hashlib, creds.algorithm)
-    ).digest()
-    mac = base64.b64encode(digest).decode()
-
-    fields = [f'id="{creds.id}"', f'ts="{ts}"', f'nonce="{nonce}"']
-    if hash_value:
-        fields.append(f'hash="{hash_value}"')
-    if ext:
-        fields.append(f'ext="{ext}"')
-    fields.append(f'mac="{mac}"')
-    return "Hawk " + ", ".join(fields)
 
 
 # --------------------------------------------------------------------------
@@ -233,46 +207,42 @@ def hawk_header(
 # --------------------------------------------------------------------------
 
 
+@dataclass
+class Auth:
+    session_token: str | None = None
+    refresh_token: str | None = None
+
+    def header(self) -> str:
+        if not self.session_token:
+            raise PdxError("auth", "no session token")
+        # The Authorization header is a JSON object, not a scheme string.
+        return json.dumps({"session": {"token": self.session_token}})
+
+
 class PdxSession:
     def __init__(self, base: str = HOSTS["prod"], timeout: int = 300) -> None:
         self.base = base.rstrip("/")
         self.timeout = timeout
-        self.creds: Credentials | None = None
+        self.auth = Auth()
         self.report = Reporter()
 
-    def _send_once(
-        self, method: str, path: str, body: bytes, content_type: str, signed: bool
-    ) -> Any:
-        """One attempt. Raises PdxError tagged retryable or not."""
-        url = f"{self.base}{path}"
-        headers = dict(PDX_HEADERS)
-        if content_type:
-            headers["Content-Type"] = content_type
-        if signed:
-            if self.creds is None:
-                raise PdxError("auth", "not logged in")
-            headers["Authorization"] = hawk_header(
-                self.creds, method, url, body, content_type
-            )
+    # -- low-level ---------------------------------------------------------
 
+    def _send_once(self, method: str, url: str, *, body: bytes, content_type: str,
+                   headers: dict[str, str]) -> Any:
         request = urllib.request.Request(url, data=body or None, method=method.upper())
         for name, value in headers.items():
             request.add_header(name, value)
-
+        if content_type:
+            request.add_header("Content-Type", content_type)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
-            # 4xx is the caller's fault and will fail identically next time.
-            # Retrying a rejected password is how accounts get locked.
-            raise PdxError(
-                "http", server_message(exc.read()) or exc.reason,
-                status=exc.code, retryable=exc.code in RETRY_STATUSES,
-            ) from exc
+            raise PdxError("http", server_message(exc.read()) or exc.reason,
+                           status=exc.code, retryable=exc.code in RETRY_STATUSES) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            reason = getattr(exc, "reason", exc)
-            raise PdxError("network", f"{reason}", retryable=True) from exc
-
+            raise PdxError("network", f"{getattr(exc, 'reason', exc)}", retryable=True) from exc
         if not raw:
             return None
         try:
@@ -280,23 +250,17 @@ class PdxSession:
         except json.JSONDecodeError:
             return raw
 
-    def _request(
-        self,
-        step: str,
-        method: str,
-        path: str,
-        *,
-        body: bytes = b"",
-        content_type: str = "",
-        signed: bool = True,
-    ) -> Any:
+    def _call(self, step: str, method: str, url: str, *, body: bytes = b"",
+              content_type: str = "", headers: dict[str, str] | None = None) -> Any:
+        """One reported, retried step against a full URL."""
         started = time.monotonic()
+        hdrs = headers if headers is not None else self._api_headers()
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                result = self._send_once(method, path, body, content_type, signed)
+                result = self._send_once(method, url, body=body,
+                                         content_type=content_type, headers=hdrs)
             except PdxError as exc:
-                last = attempt == MAX_ATTEMPTS
-                if exc.retryable and not last:
+                if exc.retryable and attempt < MAX_ATTEMPTS:
                     delay = BACKOFF_SECONDS * (2 ** (attempt - 1))
                     print(f"  ...  {step} failed ({exc}), retry {attempt + 1}"
                           f"/{MAX_ATTEMPTS} in {delay:.0f}s", flush=True)
@@ -306,139 +270,143 @@ class PdxSession:
                     step, ok=False, attempts=attempt,
                     elapsed_ms=int((time.monotonic() - started) * 1000),
                     status=exc.status,
-                    message=f"{exc}" + (" (gave up after retries)" if exc.retryable else ""),
-                ))
+                    message=f"{exc}" + (" (gave up after retries)" if exc.retryable else "")))
                 exc.step = step
                 raise
             self.report.add(StepResult(
                 step, ok=True, attempts=attempt,
-                elapsed_ms=int((time.monotonic() - started) * 1000), status=200,
-            ))
+                elapsed_ms=int((time.monotonic() - started) * 1000), status=200))
             return result
         raise AssertionError("unreachable")
 
-    def _json(self, route: str, payload: dict, *, signed: bool = True, **fmt) -> Any:
+    def _api_headers(self) -> dict[str, str]:
+        headers = dict(PDX_HEADERS)
+        headers["Authorization"] = self.auth.header()
+        headers["x-accept-version"] = ACCEPT_VERSION
+        return headers
+
+    def _api(self, step: str, route: str, *, json_body: dict | None = None,
+             query: dict | None = None, **fmt) -> Any:
         method, path = _route(route)
-        body = json.dumps(payload).encode()
-        return self._request(
-            route, method, path.format(**fmt), body=body,
-            content_type="application/json", signed=signed,
-        )
+        url = self.base + path.format(**fmt)
+        if query:
+            url += "?" + urlencode(query)
+        body = json.dumps(json_body).encode() if json_body is not None else b""
+        return self._call(step, method, url, body=body,
+                          content_type="application/json" if json_body is not None else "")
 
-    def _binary(self, route: str, blob: bytes, **fmt) -> Any:
-        method, path = _route(route)
-        return self._request(
-            route, method, path.format(**fmt), body=blob,
-            content_type="application/octet-stream",
-        )
+    # -- API surface -------------------------------------------------------
 
-    # -- API surface, mirroring PDX_Upload's call order --------------------
-
-    def login(self, user: str, password: str) -> None:
-        data = self._json("login", {"email": user, "password": password}, signed=False)
-        self.creds = Credentials(
-            id=data["session"]["id"],
-            key=data["session"]["key"],
-            algorithm=data["session"].get("algorithm", "sha256"),
-            session_token=data.get("sessionToken"),
-            refresh_token=data.get("refresh_token"),
-        )
+    def establish_session(self, refresh_token: str) -> None:
+        """Exchange a refresh token for a session token via the renewal call."""
+        self.auth.refresh_token = refresh_token
+        method, path = _route("renew")  # raises cleanly while unknown
+        # TODO(capture): confirm the request shape. Most likely the refresh
+        # token goes in the Authorization header as {"session":{"token":…}} or a
+        # {"renewal":{…}} object, possibly with an empty body. Adjust once seen.
+        headers = dict(PDX_HEADERS)
+        headers["Authorization"] = json.dumps({"session": {"token": refresh_token}})
+        headers["x-accept-version"] = ACCEPT_VERSION
+        data = self._call("renew", method, self.base + path, headers=headers)
+        session = (data or {}).get("session", {})
+        token = session.get("token")
+        if not token:
+            raise PdxError("renew", "renewal returned no session token")
+        self.auth.session_token = token
+        # A rotated refresh token, if the response carries one, is worth surfacing.
+        self.auth.refresh_token = session.get("refresh_token", refresh_token)
 
     def mod_details(self, mod_id: int) -> dict:
-        method, path = _route("mod_details")
-        return self._request("mod_details", method, path.format(mod_id=mod_id))
+        return self._api("mod_details", "mod_details",
+                         query={"arch": DEFAULT_ARCH, "modId": mod_id, "os": DEFAULT_OS}) or {}
 
-    def setup_for_publish(self, folder_name: str | None = None) -> dict:
-        return self._json("setup_publish", {"folderName": folder_name} if folder_name else {})
+    def presign(self, mod_name: str, file_name: str) -> dict:
+        """Ask for a presigned upload URL for one file."""
+        return self._api("presign", "presign",
+                         json_body={"fileName": file_name, "gameName": GAME_NAME,
+                                    "modName": mod_name})
 
-    def upload_asset(self, mod_name: str, file_path: str) -> str:
-        blob = _read_limited(file_path, 2 * 1024 * 1024, "asset")
-        return self._binary("upload_asset", blob, mod_name=mod_name)["fileName"]
+    def upload_to_storage(self, step: str, presigned_url: str, blob: bytes,
+                          content_type: str) -> None:
+        """PUT raw bytes to the storage host. No PDX headers, no auth - the
+        presigned URL carries its own signature."""
+        self._call(step, "PUT", presigned_url, body=blob,
+                  content_type=content_type or "application/octet-stream", headers={})
 
-    def upload_content(self, mod_name: str, payload_path: str) -> str:
-        with open(payload_path, "rb") as handle:
-            blob = handle.read()
-        return self._binary("upload_content", blob, mod_name=mod_name)["fileName"]
-
-    def publish(self, body: dict, mod_id: int | None) -> dict:
-        if mod_id:
-            return self._json("publish_new_version", body | {"modId": mod_id})
-        return self._json("publish", body)
+    def publish_version(self, mod_id: int, body: dict) -> dict:
+        return self._api("publish_version", "publish_version",
+                         json_body=body, mod_id=mod_id)
 
 
 def _route(name: str) -> tuple[str, str]:
     route = ROUTES.get(name)
     if route is None:
-        raise PdxError(
-            name,
-            f"route '{name}' is unknown. Run a capture (see PDX_API_NOTES.md) "
-            f"and fill ROUTES in {os.path.basename(__file__)}.",
-        )
+        raise PdxError(name, f"route '{name}' is not known yet. One capture of a "
+                             f"session renewal fills it - see HANDOFF.md.")
     return route
 
 
-def _read_limited(path: str, limit: int, what: str) -> bytes:
-    size = os.path.getsize(path)
-    if size > limit:
-        raise PdxError(what, f"{path} is {size} bytes; the service rejects over {limit}")
+def _read(path: str) -> bytes:
     with open(path, "rb") as handle:
         return handle.read()
 
 
 # --------------------------------------------------------------------------
-# Entry point
+# Orchestration
 # --------------------------------------------------------------------------
 
 
 def publish_mod(args: argparse.Namespace) -> int:
-    user = os.environ.get("PDX_USER")
-    password = os.environ.get("PDX_PASS")
-    if not user or not password:
-        print("error: set PDX_USER and PDX_PASS", file=sys.stderr)
+    refresh = os.environ.get("PDX_REFRESH")
+    if not refresh:
+        print("error: set PDX_REFRESH (the Paradox account refresh token)", file=sys.stderr)
         return 2
 
     session = PdxSession(HOSTS[args.env])
     title = f"Publish to Paradox Mods ({args.env}) — version {args.version}"
 
     try:
-        session.login(user, password)
+        session.establish_session(refresh)
 
-        details = session.mod_details(args.mod_id) if args.mod_id else {}
-        existing_name = details.get("Name") or None
-        setup = session.setup_for_publish(existing_name)
-        mod_name = existing_name or setup["modName"]
+        details = session.mod_details(args.mod_id)
+        mod_name = details.get("Name") or details.get("modName")
+        if not mod_name:
+            raise PdxError("mod_details", f"mod {args.mod_id} returned no name")
 
-        thumbnail = session.upload_asset(mod_name, args.thumbnail)
-        screenshots = [session.upload_asset(mod_name, s) for s in args.screenshot]
-        content = session.upload_content(mod_name, args.payload)
+        # Thumbnail: presign, then PUT the bytes to the returned URL.
+        thumb_name = os.path.basename(args.thumbnail)
+        thumb = session.presign(mod_name, thumb_name)
+        session.upload_to_storage("upload_thumbnail", thumb["presignedUrl"],
+                                  _read(args.thumbnail), thumb.get("contentType", ""))
 
-        result = session.publish(
-            {
-                "modName": mod_name,
-                "displayName": args.title,
-                "shortDescription": args.short_description,
-                "longDescription": _read_text(args.description_file),
-                "thumbnail": thumbnail,
-                "screenshotNames": screenshots,
-                "fileName": content,
-                "version": args.version,
-                "gameName": PDX_HEADERS["X-PDX-Game-Name"],
-                "tags": args.tag,
-            },
-            args.mod_id,
-        )
+        # Content zip: same two steps.
+        content_name = os.path.basename(args.payload)
+        content = session.presign(mod_name, content_name)
+        session.upload_to_storage("upload_content", content["presignedUrl"],
+                                  _read(args.payload), content.get("contentType", ""))
+
+        result = session.publish_version(args.mod_id, {
+            "contentFileName": content["fileName"],
+            "thumbnail": thumb["fileName"],
+            "displayName": args.title,
+            "shortDescription": args.short_description,
+            "longDescription": _read_text(args.description_file),
+            "changelogEntry": args.changelog,
+            "tags": args.tag,
+            "userModVersion": str(args.version),
+            "arch": DEFAULT_ARCH,
+            "os": DEFAULT_OS,
+            "acl": DEFAULT_ACL,
+            "recommendedGameVersion": DEFAULT_RECOMMENDED_GAME_VERSION,
+        })
     except PdxError as exc:
         session.report.publish(title, args.result_json)
-        # Content already on the server but never published leaves an orphan the
-        # next attempt will replace - worth saying so rather than leaving it to
-        # be discovered.
         partial = session.report.reached("upload_content")
         print(f"\nFAILED at step '{exc.step}'"
-              + (f" (HTTP {exc.status})" if exc.status else "")
-              + f": {exc}", file=sys.stderr)
+              + (f" (HTTP {exc.status})" if exc.status else "") + f": {exc}", file=sys.stderr)
         if partial:
-            print("The payload was uploaded but never published. Nothing is live; "
-                  "re-running replaces it.", file=sys.stderr)
+            print("The content was uploaded but the version was never published. "
+                  "Nothing is live; re-running replaces it.", file=sys.stderr)
         return 5 if partial else 1
 
     session.report.publish(title, args.result_json)
@@ -448,51 +416,38 @@ def publish_mod(args: argparse.Namespace) -> int:
 
 
 def preflight(args: argparse.Namespace) -> int:
-    """Check everything that does not need a route, and report. Never sends."""
+    """Check everything that does not touch the network, and report."""
     ok = True
 
     if args.mod_id:
         print(f"  ok      updating existing mod {args.mod_id}")
     else:
-        print("  WARN    no --mod-id: this would publish a NEW mod page, not a "
-              "new version of the existing one")
+        print("  MISSING --mod-id: this repository only ever updates mod 154004")
         ok = False
 
-    for name in ("PDX_USER", "PDX_PASS"):
-        value = os.environ.get(name)
-        if value:
-            # Length only. The value itself is never printed.
-            print(f"  ok      {name} present ({len(value)} chars)")
-        else:
-            print(f"  MISSING {name}")
-            ok = False
+    if os.environ.get("PDX_REFRESH"):
+        print(f"  ok      PDX_REFRESH present ({len(os.environ['PDX_REFRESH'])} chars)")
+    else:
+        print("  MISSING PDX_REFRESH")
+        ok = False
 
-    for label, path, limit in (
-        ("payload", args.payload, None),
-        ("thumbnail", args.thumbnail, 2 * 1024 * 1024),
-        *[("screenshot", s, 2 * 1024 * 1024) for s in args.screenshot],
-    ):
-        if not path:
-            continue
-        if not os.path.exists(path):
+    for label, path, limit in (("payload", args.payload, None),
+                               ("thumbnail", args.thumbnail, 2 * 1024 * 1024)):
+        if not path or not os.path.exists(path):
             print(f"  MISSING {label} {path}")
             ok = False
         elif limit and os.path.getsize(path) > limit:
-            print(f"  TOO BIG {label} {path} is {os.path.getsize(path)} bytes, limit {limit}")
+            print(f"  TOO BIG {label} {path} ({os.path.getsize(path)} bytes > {limit})")
             ok = False
         else:
             print(f"  ok      {label} {path} ({os.path.getsize(path)} bytes)")
 
-    creds = Credentials(id="preflight", key="preflight")
-    header = hawk_header(creds, "POST", f"{HOSTS[args.env]}/", b"{}", "application/json")
-    print(f"  ok      hawk signing produces {header.split(',')[0]}, mac present={'mac=' in header}")
-
     unknown = missing_routes()
     print(f"  {'ok     ' if not unknown else 'PENDING'} routes: "
-          + ("all known" if not unknown else f"{len(unknown)} still unknown - " + ", ".join(unknown)))
+          + ("all known" if not unknown else f"{len(unknown)} unknown - " + ", ".join(unknown)))
 
     print("\ndry run complete: " + ("ready to publish" if ok and not unknown
-                                    else "plumbing verified, capture the routes to go live"))
+                                    else "plumbing verified; capture the renewal route to go live"))
     return 0 if ok else 1
 
 
@@ -504,21 +459,19 @@ def _read_text(path: str | None) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--payload", required=True, help="packed mod archive to upload")
+    parser = argparse.ArgumentParser(description="Publish the mod to Paradox Mods.")
+    parser.add_argument("--payload", required=True, help="packed mod archive")
     parser.add_argument("--thumbnail", required=True, help="cover image, max 2 MB")
-    parser.add_argument("--screenshot", action="append", default=[], help="repeatable")
     parser.add_argument("--title", default="SMR Community Fixes")
     parser.add_argument("--short-description", default="")
     parser.add_argument("--description-file")
+    parser.add_argument("--changelog", default="")
     parser.add_argument("--version", type=int, required=True)
-    parser.add_argument("--mod-id", type=int, help="omit for a first publication")
+    parser.add_argument("--mod-id", type=int, required=True)
     parser.add_argument("--tag", action="append", default=[])
     parser.add_argument("--env", choices=sorted(HOSTS), default="prod")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="verify credentials, payload and signing without sending anything")
-    parser.add_argument("--result-json", default="publish-result.json",
-                        help="where to write the machine-readable outcome")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--result-json", default="publish-result.json")
     args = parser.parse_args(argv)
 
     if args.dry_run:
@@ -526,12 +479,8 @@ def main(argv: list[str] | None = None) -> int:
 
     unknown = missing_routes()
     if unknown:
-        print(
-            "error: these routes are still unknown: " + ", ".join(unknown) +
-            "\nRun one capture against the real service and fill ROUTES."
-            "\nSee tools/publish/PDX_API_NOTES.md.",
-            file=sys.stderr,
-        )
+        print("error: unknown routes: " + ", ".join(unknown)
+              + "\nCapture a session renewal to fill them. See HANDOFF.md.", file=sys.stderr)
         return 3
 
     return publish_mod(args)

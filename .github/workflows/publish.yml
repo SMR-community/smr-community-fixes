@@ -95,14 +95,15 @@ jobs:
 
       - name: Publish
         env:
-          PDX_USER: ${{ secrets.PDX_USER }}
-          PDX_PASS: ${{ secrets.PDX_PASS }}
+          # Refresh-token auth: no password, no salt. See tools/publish/HANDOFF.md.
+          PDX_REFRESH: ${{ secrets.PDX_REFRESH }}
         run: |
           python tools/publish/pdx_client.py \
             --payload dist/SMRCF.zip \
             --thumbnail Images/smr_community_fixes.jpg \
             --title "SMR Community Fixes" \
             --short-description "A community-maintained collection of bug fixes for Surviving Mars: Relaunched." \
+            --changelog "$(sed -n "s/.*'last_changes', \"\(.*\)\",/\1/p" metadata.lua | head -n 1)" \
             --version "$VERSION" \
             --mod-id "$PDX_MOD_ID" \
             --env "${{ inputs.env || 'prod' }}" \
