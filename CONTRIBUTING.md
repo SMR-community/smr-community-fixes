@@ -3,6 +3,10 @@
 Anyone can add a fix. It is a Lua-only job: no build step, no tooling, one new
 file.
 
+Found a bug but not its cause? Don't write a fix — [open an
+issue](../../issues/new?template=bug_report.yml) instead. A save that reproduces
+it is worth more than a guess at the cause.
+
 ## The one rule
 
 **A fix restores the game's intended vanilla behavior and nothing more.** No new
