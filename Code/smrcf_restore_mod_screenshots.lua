@@ -31,7 +31,7 @@ local FIX = {
 	default_enabled = false,
 	debug = false,
 	label = "Restore Mod Screenshots",
-	description = "Stops the error shown when opening a mod with screenshots in the Paradox Mods browser, so its screenshots load.",
+	description = "Stops the error shown when opening a mod with screenshots in the Paradox Mods browser.",
 }
 
 local CLASS_NAME = "ModUI_Entry"
