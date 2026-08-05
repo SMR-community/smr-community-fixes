@@ -1,29 +1,29 @@
 # DESCRIPTION.md — Mod Requirements: SMR Community Fixes
 
-This file is the single source of requirements for this mod. Read it with
-`CONTRIBUTING.md`.
+The single source of requirements for this mod. `CONTRIBUTING.md` covers how to
+write and submit a fix.
 
 ## 1. Mod identity
 
 ```text
-Mod display name:        SMR Community Fixes
-Mod folder name:         smr-community-fixes
-Mod id:                  SMRCF (never change after release)
-Prefix for new files:    smrcf_
-Repository path:         D:\PROJS\SMR\smr-community-fixes
-Payload source folder:   . (the repository root is the mod payload)
-Existing mod or new:     new from scratch
-Git remote:              https://github.com/facazevedo/SMR-bug-fixes.git
-Target game version:     Surviving Mars: Relaunched v1.0.7 (Lua revision 392284)
+Mod display name:      SMR Community Fixes
+Mod folder name:       smr-community-fixes
+Mod id:                SMRCF (never change after release)
+Prefix for new files:  smrcf_
+Payload folder:        . (the repository root is the mod payload)
+Git remote:            https://github.com/SMR-community/smr-community-fixes.git
+Target game version:   Surviving Mars: Relaunched v1.0.7
+Mod API revision:      350453 (the 'lua_revision' every mod declares; 392284 is
+                       the game build, recorded separately as saved_with_revision)
 ```
 
-The user explicitly requires every completed change set to be committed, copied
-to the local Mods folder, and pushed to the authorized GitHub repository.
+Every completed change set is committed, pushed, and copied to the local Mods
+folder. Anyone in the SMR-community organisation can push to `main` — see *Who
+can push* in `CONTRIBUTING.md`.
 
-Local Mods deployment includes `metadata.lua`, `items.lua`, all registered files
-under `Code\`, and the complete `Images\` folder. Do **not** copy repository-only
-documentation (`README.md`, `CONTRIBUTING.md`, `DESCRIPTION.md`) or the
-`templates\`, `tools\`, and `.github\` folders.
+Deployment copies `metadata.lua`, `items.lua`, every registered file under
+`Code\`, and all of `Images\`. It never copies `README.md`, `CONTRIBUTING.md`,
+`DESCRIPTION.md`, `templates\`, `tools\`, or `.github\`.
 
 ## 1A. Code layout: exactly two kinds of file
 
@@ -38,15 +38,17 @@ documentation (`README.md`, `CONTRIBUTING.md`, `DESCRIPTION.md`) or the
   or read any global, defined by another file in this mod. Each carries its own
   `FIX` descriptor, its own inline logger, and its own repair.
 
-A fix registers itself by appending its `FIX` descriptor table to the plain
-global list `_G.SMRCommunityFixesPending`. `SMRCommunityFixes.lua` adopts that list, disables any fix
-that disappeared since the previous Lua load, and clears the list. Because the engine mod sandbox blocks `io`, `dofile`, and `dofolder`
-(`ModEnvBlacklist` in `Src\CommonLua\Classes\Mod.lua`), no Lua inside the mod can
-discover a new file or edit `metadata.lua`: a new fix must still be added to
-`metadata.lua` `'code'` and `items.lua`. Its position in the list does not matter -
-`SMRCommunityFixes.lua` adopts the pending descriptors during load when it is listed after
-the fixes, and at `ClassesBuilt` when it is listed before them, seeding defaults
-for anything adopted late.
+A fix registers itself by appending its `FIX` descriptor to the plain global list
+`_G.SMRCommunityFixesPending`. `SMRCommunityFixes.lua` adopts that list, disables
+any fix that disappeared since the previous Lua load, and clears it. Position in
+the `'code'` list does not matter: the framework adopts descriptors already
+registered when it loads, and picks up later ones at `ClassesBuilt`, seeding
+defaults for those.
+
+Every fix must still be listed in `metadata.lua` `'code'` and `items.lua`,
+because the engine mod sandbox blocks `io`, `dofile` and `dofolder`
+(`ModEnvBlacklist` in `Src\CommonLua\Classes\Mod.lua`), so no Lua inside the mod
+can discover a file or edit its own registration.
 
 Only `id`, `description` and `set_enabled` are required of a descriptor. The
 framework normalizes the rest when absent — `number` (next free), `beta` (true),
@@ -54,13 +56,13 @@ framework normalizes the rest when absent — `number` (next free), `beta` (true
 (false), `label` (derived from the id) and `quiesce` (switch yourself off) — so a
 short descriptor is a valid descriptor and the defaults are the conservative ones.
 
-Adding a fix is a Lua-only job and stays that way: no build step and nothing to
+Adding a fix is a Lua-only job and stays that way: no build step, nothing to
 install. A contributor copies `templates\smrcf_restore_TEMPLATE.lua` to
-`Code\smrcf_restore_<fix>.lua` and edits Lua. The two registration entries — one in the
-`metadata.lua` `'code'` list, one matching `ModItemCode` in `items.lua` — are needed
-locally to test in game, but may be omitted from a pull
-request: GitHub adds them on merge (section 1B). `CONTRIBUTING.md` documents the
-descriptor contract. `templates\` is not deployed.
+`Code\smrcf_restore_<fix>.lua` and edits Lua. The two registration entries — one
+in the `metadata.lua` `'code'` list, one matching `ModItemCode` in `items.lua` —
+are written by CI as soon as the branch is pushed (section 1B), so nobody adds
+them by hand. `CONTRIBUTING.md` documents the descriptor contract.
+`templates\` is not deployed.
 
 ## 1B. Continuous integration
 
@@ -72,21 +74,26 @@ lua tools/sync_mod.lua check    report problems (exit 1) and registration drift 
 lua tools/sync_mod.lua sync     append new fixes at the end of both lists, bump 'version'
 ```
 
-Two GitHub workflows drive it, and `.github\workflows\` and `tools\` are not
+Three GitHub workflows drive it. `.github\workflows\` and `tools\` are not
 deployed:
 
-* `check-fixes.yml` — on every pull request touching the payload. Installs
-  `lua5.4`, parses every Lua file with `luac -p`, then runs `check`. Read-only, so
-  it is safe for pull requests from forks. It fails only on findings a person must
-  resolve: duplicate id, a pinned number already in use, a template placeholder,
-  `debug = true`, a reference to framework internals, or a missing
-  `description`/`set_enabled`. Unregistered files are notices, not failures.
-* `register-fixes.yml` — on push to `main` touching `Code\`. Re-runs `check`,
-  refuses to register anything that still has a problem, then runs `sync` and
-  commits the resulting `metadata.lua`/`items.lua` change with `[skip ci]`. It runs
-  only on reviewed code already on `main`, so it never executes anything from an
-  untrusted fork and needs no `pull_request_target`. `github.actor` and `[skip ci]`
-  both guard against it retriggering itself.
+* `register-on-branch.yml` — on push to any branch but `main` touching `Code\`.
+  Runs `sync` and commits the registration back to that branch, so a pull request
+  arrives already registered. `check` runs last here, so a work-in-progress branch
+  is still registered while the check reports what is left to fix. On a fork it
+  runs in the fork, with the fork's own token.
+* `check-fixes.yml` — on every pull request touching the payload. Parses every
+  Lua file with `luac -p`, then runs `check`. Read-only, so it is safe for pull
+  requests from forks. It fails only on findings a person must resolve: duplicate
+  id, a pinned number already in use, a template placeholder, `debug = true`, a
+  reference to framework internals, or a missing `description`/`set_enabled`.
+* `register-fixes.yml` — on push to `main` touching `Code\`. The safety net for
+  what a branch run missed: a fork with Actions disabled, or a commit straight to
+  `main`. Here `check` runs **first**, so a fix with a problem is never registered
+  on `main`.
+
+Both registering workflows commit with `[skip ci]` and skip the
+`github-actions[bot]` actor, so neither retriggers itself.
 
 The mod itself is unaffected by either: no runtime code, asset, or behavior depends
 on them, and the version bump they make is the same integer a maintainer would edit
