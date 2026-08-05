@@ -177,8 +177,14 @@ displayName        shortDescription   longDescription
 contentFileName    changelogEntry     recommendedGameVersion
 ```
 
-Everything else is optional: `thumbnail`, `tags`, `userModVersion`, `arch`,
-`os`, `acl`.
+Everything else is optional: `thumbnail`, `screenshotNames`, `tags`,
+`userModVersion`, `arch`, `os`, `acl`.
+
+**Optional fields are not type-checked.** A deliberately absurd
+`screenshots: 12345` was accepted as readily as a correct value, while a
+required field with the wrong type is caught (`recommendedGameVersion: Must be
+a string`). So passing validation says nothing about an optional field being
+right — it can only be confirmed by publishing and looking at the page.
 
 Three of the six are the mod page's own text. That means **every publish
 rewrites the page's description**, and a client that does not supply it blanks
@@ -189,6 +195,34 @@ so hardcoding `os: Windows` would have narrowed it.
 
 `longDescription` is HTML (`<p>`, `<strong>`, `<a>`, `<ol>`), not the plain text
 in `metadata.lua`, and it contains wording that exists only on the mod page.
+
+### Images: covers and screenshots
+
+Both upload identically — presign, then PUT the bytes. Nothing about the upload
+says what kind of image it is; the service files it by **which field of the
+version PUT names it**, into `content/covers/` or `content/screenshots/`, and
+generates the resized variants itself:
+
+```
+displayImagePath  …/content/covers/cover_2.jpg
+screenshots       [ { "image":     …/content/screenshots/screenshot_01.jpg,
+                      "thumbnail": …/content/screenshots/screenshot_01_thumb.jpg } ]
+```
+
+The uploaded file name is kept verbatim, so `screenshot_01.jpg` in this
+repository becomes `screenshot_01.jpg` there.
+
+`screenshots` is definitely the field the service **reads back**, as those
+objects. The request side sends *names*, and the DLL carries a separate
+`screenshotNames` literal for exactly that, which is what the client sends.
+This is the one field in the whole protocol not confirmed by observation —
+optional fields are not validated, so a wrong key here does not error, the
+screenshots simply never appear. If a publish leaves the page without them, send
+the same list under `screenshots` instead.
+
+A read of any mod that has screenshots shows the shape; mod ids are global
+across Paradox games, so a neighbouring id works even if it belongs to another
+game.
 
 ### Error shape
 

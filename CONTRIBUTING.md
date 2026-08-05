@@ -196,6 +196,11 @@ all three on every version and would otherwise blank them. Edit that text on the
 mod page itself; this repository only ships code, images and the changelog entry
 (which comes from `'last_changes'` in `metadata.lua`, and cannot be empty).
 
+The cover image and the screenshots do come from here: `Images\` holds both, and
+`publish.yml` names which is which. Add a screenshot by putting it in `Images\`,
+declaring it in `metadata.lua` as `'screenshot2'` and so on, and passing it with
+another `--screenshot` in the workflow.
+
 To rehearse, run the workflow from the **Actions** tab with **dry run** on: it
 packs the payload and checks the secret, and sends nothing.
 

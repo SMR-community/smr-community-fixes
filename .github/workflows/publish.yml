@@ -111,6 +111,7 @@ jobs:
           python tools/publish/pdx_client.py \
             --payload dist/SMRCF.zip \
             --thumbnail Images/smr_community_fixes.jpg \
+            --screenshot Images/screenshot_01.jpg \
             --changelog "$changelog" \
             --version "$VERSION" \
             --mod-id "$PDX_MOD_ID" \
