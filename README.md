@@ -84,7 +84,7 @@ obey, the descriptor contract, what a reviewer checks, and how to test in game.
 **[DESCRIPTION.md](DESCRIPTION.md)** holds the complete requirements, the per-fix
 behaviour specifications, and the manual test steps.
 
-Four things happen automatically:
+Three things then happen automatically:
 
 * **Push a fix to a branch** → it is registered in `metadata.lua` and
   `items.lua` and the mod version is bumped, on that branch. Pull afterwards.
@@ -92,18 +92,29 @@ Four things happen automatically:
   for a duplicate id, a taken number, leftover template placeholders,
   diagnostics left on, and references to framework internals.
 * **Merge it** → the same registration runs on `main`, as a safety net.
-* **Push a version tag** → the mod is packed and uploaded to Paradox Mods.
 
-Only that last step reaches players:
+## Publishing
+
+Players get the mod from Paradox Mods, and that page is updated from GitHub —
+nobody needs the game installed to publish.
+
+Merging does not publish. Pushing a version tag does:
 
 ```
 git tag v2
 git push origin v2
 ```
 
-Merging never publishes on its own, so several fixes can land and then ship
-together as one release. *Publishing to Paradox Mods* in
-[CONTRIBUTING.md](CONTRIBUTING.md) has the detail.
+That packs `metadata.lua`, `items.lua`, `Code/` and `Images/` and uploads them.
+So several fixes can land first and ship together as one release, when someone
+decides it is ready.
+
+Anyone who can push can tag, and a tag is the one action here that reaches
+players. Before uploading, it re-runs the fix check and refuses the tag unless
+the mod version has moved since the last release. If an upload fails it says
+which step failed and opens an issue.
+
+*Publishing to Paradox Mods* in [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 
 ## Reporting a bug in the game
 
