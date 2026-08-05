@@ -1,7 +1,7 @@
 """Publish this mod to Paradox Mods over HTTP, without the game.
 
-The protocol was recovered by capturing the game's own traffic (see
-PDX_API_NOTES.md and HANDOFF.md). The real upload is:
+The protocol was recovered by capturing the game's own traffic and then checked
+against the live service; PDX_API_NOTES.md records it. The upload is:
 
     establish session   (refresh token -> session token)
     GET  /mods?modId=…                      current mod state; its `name` is the

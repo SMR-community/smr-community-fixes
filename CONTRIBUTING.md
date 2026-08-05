@@ -182,86 +182,75 @@ git tag v4
 git push origin v4
 ```
 
-[`publish.yml`](.github/workflows/publish.yml) then checks the payload, refuses
-the tag if `'version'` has not moved since the last one, packs `metadata.lua`,
-`items.lua`, `Code\` and `Images\`, and uploads that to Paradox Mods.
+[`publish.yml`](.github/workflows/publish.yml) checks the payload, refuses the
+tag unless `'version'` in `metadata.lua` has moved, packs `metadata.lua`,
+`items.lua`, `Code\` and `Images\`, and uploads that.
 
-The tag is only the trigger — the version players see is the integer in
-`metadata.lua`, which CI bumps for you. So several fixes can merge, and you
-publish them together when you choose.
+**You need no Paradox account.** CI authenticates from the `PDX_REFRESH` secret,
+so anyone who can push a tag can release — and it does not matter whether anyone
+is logged in to Paradox anywhere.
 
-The mod page's own wording — its title, short description and long description —
-is read back from Paradox and republished unchanged, because the service demands
-all three on every version and would otherwise blank them. Edit that text on the
-mod page itself; this repository only ships code, images and the changelog entry
-(which comes from `'last_changes'` in `metadata.lua`, and cannot be empty).
+The tag is only the trigger. The version players see is the integer in
+`metadata.lua`, which CI bumps when a fix lands, so several fixes can merge and
+ship together when someone decides it is time.
 
-The cover image does come from here — `Images\smr_community_fixes.jpg`, named by
-`publish.yml`. It is the only image published, and screenshots are left to the
-mod page.
+### What comes from where
 
-To rehearse, run the workflow from the **Actions** tab with **dry run** on. It
-packs the payload and sends nothing, and it answers the question a contributor
-cannot otherwise answer without a Paradox account of their own: it exchanges the
-stored token for a session, confirms that account may edit the mod, and confirms
-the version is above the published one. So a green dry run means a tag would go
-through, and a red one names the reason.
+| | |
+|---|---|
+| Code, cover image, changelog | this repository |
+| Title, short and long description | the mod page |
 
-The likeliest red is `REJECTED PDX_REFRESH was not accepted (HTTP 401)`, which
-means the token has been revoked or replaced and the secret needs setting again
-— see *What you get back* below. Nobody but whoever holds the publishing account
-can fix that, so it is worth checking before you tag rather than after.
+Paradox requires the page's wording on every version, so the publisher reads it
+back and republishes it unchanged. Edit that text on Paradox, not here. The
+changelog entry comes from `'last_changes'` in `metadata.lua` and cannot be
+empty. The cover is `Images\smr_community_fixes.jpg`; no screenshots are
+published.
+
+### Rehearse first
+
+Run the workflow from the **Actions** tab with **dry run** on. It sends nothing,
+and it tells you whether a tag would work: it exchanges the token for a session,
+confirms the account may edit the mod, and confirms the version is above the
+published one.
+
+Green means a tag would go through. The likeliest red is
+`REJECTED PDX_REFRESH was not accepted (HTTP 401)` — the token needs replacing,
+and only whoever holds the publishing account can do it:
+
+```
+gh secret set PDX_REFRESH
+```
+
+The value is `refreshToken` from
+`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json`. Read it **while
+logged in** (logging out erases the local copy) and let no trailing newline in —
+it is a 36-character UUID, and the dry run prints the length it found.
 
 ### What you get back
 
-**You are told either way.** Both outcomes write a per-step table to the run
-summary:
+Either way, a per-step table goes to the run summary:
 
 | Step | Result | Status | Time |
 |---|---|---|---|
 | `renew` | ✅ | 200 | 658 ms |
 | `mod_details` | ✅ | 200 | 198 ms |
-| `presign` | ✅ | 200 | 172 ms |
 | `upload_thumbnail` | ✅ | 200 | 418 ms |
 | `upload_content` | ❌ | 504 | 20019 ms |
 
-**If it published**, you get a [release](../../releases) for the tag: the mod
-version in the title, a link to the mod page, the commits since the last
-release, and `SMRCF.zip` — the exact payload uploaded — attached to it.
+**Published** cuts a [release](../../releases) for the tag, carrying the exact
+`SMRCF.zip` that was uploaded.
 
-**If it failed**, you get an issue titled `Publishing v4 failed`, saying which
-step broke, the HTTP status, the server's own message, who tagged and a link to
-the run. Tagging again comments on that same issue rather than opening another,
-and it closes itself once a tag succeeds.
+**Failed** opens an issue naming the step, the status and the server's message.
+Re-tagging comments on that issue rather than opening another, and it closes
+itself once a tag succeeds. Exit codes: `0` published, `1` nothing uploaded,
+`2` missing secret or changelog, `5` uploaded but not published (not live —
+re-tagging replaces it).
 
-The exit code says what state things are in:
+Timeouts and 5xx retry four times with backoff. A 4xx never retries: the request
+was wrong, and repeating it only wastes the upload.
 
-| | |
-|---|---|
-| `0` | published |
-| `1` | failed; nothing was uploaded |
-| `2` | `PDX_REFRESH` missing, or no changelog entry to publish |
-| `5` | payload uploaded but never published — not live, re-tagging replaces it |
-
-Network errors, timeouts and 5xx retry four times with backoff before any of
-that. A 4xx never retries: it means the request itself was wrong, and repeating
-it only wastes the upload.
-
-**You do not need a Paradox account to publish.** The workflow authenticates
-from the `PDX_REFRESH` secret, so anyone who can push a tag can release, and it
-does not matter whether the account that owns the mod page is logged in
-anywhere — that was tested with it logged out of the game.
-
-If a run does fail at `renew` with a 401, the token has been revoked or replaced
-and only whoever holds the publishing account can restore it: log in once in the
-game, read `refreshToken` from
-`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json`, and run
-`gh secret set PDX_REFRESH`. Two things to get right — read the token *while
-logged in*, since logging out erases the local copy, and make sure no trailing
-newline goes into the secret. A UUID is 36 characters, and the dry run prints
-the length it found.
-
-Anyone who can push can tag. A tag is the one irreversible action here — it
+Anyone who can push can tag, and a tag is the one irreversible action here — it
 reaches every subscriber's game.
 
 ## Test before you submit

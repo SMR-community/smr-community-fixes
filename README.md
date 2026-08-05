@@ -62,7 +62,8 @@ Code/SMRCommunityFixes.lua      the framework: config, logging, settings, regist
 Code/smrcf_restore_<fix>.lua    one bug fix, completely self-contained
 templates/                      the starting point for a new fix (not shipped in the mod)
 tools/sync_mod.lua              registration and consistency checks used by CI
-tools/publish/                  publishing to Paradox Mods from CI
+tools/publish/pdx_client.py     uploads to Paradox Mods; standard library only
+tools/publish/PDX_API_NOTES.md  how that undocumented API works
 ```
 
 Every fix is a standalone module: it uses the game's own globals and the vanilla
@@ -112,9 +113,12 @@ That packs `metadata.lua`, `items.lua`, `Code/` and `Images/` and uploads them.
 So several fixes can land first and ship together as one release, when someone
 decides it is ready.
 
-Anyone who can push can tag, and a tag is the one action here that reaches
-players. Before uploading, it re-runs the fix check and refuses the tag unless
-the mod version has moved since the last release.
+Anyone who can push can tag, and no Paradox account is needed — CI holds the
+credential, and nobody has to be logged in anywhere. A tag is the one action
+here that reaches players. Before uploading, it re-runs the fix check and
+refuses the tag unless the mod version has moved since the last release. You can
+rehearse from the **Actions** tab with dry run on, which sends nothing but still
+reports whether a tag would succeed.
 
 Either way you find out what happened. A successful tag cuts a
 [release](../../releases) naming the published version and carrying the exact

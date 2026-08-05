@@ -103,15 +103,12 @@ would edit by hand.
 ## 1C. Publishing
 
 Players get the mod from Paradox Mods, and that page is updated from GitHub, not
-from the game's Mod Editor. `PDX_Upload` in the game is a driver over native
-functions in `PDXSDK.dll`, so nothing can be reused from Lua and no hosted runner
-can run it; `tools\publish\pdx_client.py` therefore talks to the service
-directly. Requests carry `Authorization: {"session":{"token":…}}` — a JSON
-object, not a scheme string — and that session token is obtained at the start of
-each run by exchanging the `PDX_REFRESH` repository secret at the renewal
-endpoint. There is no password anywhere: the game's own login hashes it with a
-per-account salt held inside `PDXSDK.dll` and never written to disk, so it
-cannot be reproduced off the machine that logged in.
+from the game's Mod Editor. The game's own upload is native code in `PDXSDK.dll`
+that no hosted runner can execute, so `tools\publish\pdx_client.py` speaks to
+the service over HTTP instead. It authenticates by exchanging the `PDX_REFRESH`
+repository secret — a refresh token — for a session at the start of each run. No
+password is involved, and none can be: the game hashes it with a per-account
+salt held inside the DLL, which cannot be reproduced elsewhere.
 
 Merging never publishes. Pushing a `v*` tag runs `publish.yml`, which:
 
@@ -120,28 +117,25 @@ Merging never publishes. Pushing a `v*` tag runs `publish.yml`, which:
    which would otherwise overwrite it rather than add one;
 3. packs `metadata.lua`, `items.lua`, `Code\` and `Images\` — the deployment set
    from section 1, and nothing else;
-4. uploads it, reporting each of the five calls with status, elapsed time and
-   attempts.
+4. uploads it, reporting each call with status, elapsed time and attempts.
 
 Timeouts, connection errors, `429` and `5xx` retry with backoff; `4xx` never
 does, since a rejected request is wrong rather than unlucky. A failed tag opens
-an issue naming the step, the status and the server's message. Exit codes
-distinguish a fatal error, a missing secret or changelog, and a failure after the
-payload uploaded but before it went live.
+an issue naming the step, the status and the server's message, and nothing
+reaches players.
 
-The service requires `displayName`, `shortDescription` and `longDescription` on
-every version, so a release that only ships new code still has to restate the
-page's wording. The client reads the mod first and sends those values back
-unchanged; publishing therefore cannot quietly blank the page, and the page's
-text stays editable on Paradox rather than being owned by this repository.
+Paradox requires the page's own title and descriptions on every version, so the
+client reads the mod first and republishes that text unchanged. A release cannot
+therefore blank the page, and the wording stays editable on Paradox rather than
+being owned by this repository.
 
-The API is undocumented, so every route, header and field was recovered by
-capturing the game's traffic and then checked against the live service;
-`tools\publish\PDX_API_NOTES.md` records the result. One detail is worth
-repeating here because it is easy to misread: `x-accept-version` is versioned per
-endpoint, and reading a mod is version `1` while presigning and publishing are
-version `2`. Sending the wrong one returns `404`, which looks like a missing
-route rather than a wrong header.
+Because publishing depends on a credential rather than a person, a contributor
+needs no Paradox account and nobody has to be logged in anywhere. The dry run
+proves this before a tag is pushed: it exchanges the token, confirms the account
+may edit the mod, and confirms the version has moved.
+
+The API is undocumented; `tools\publish\PDX_API_NOTES.md` records what it does
+and how it was established.
 
 ## 2. Task type
 

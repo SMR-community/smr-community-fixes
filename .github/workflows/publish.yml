@@ -100,7 +100,8 @@ jobs:
 
       - name: Publish
         env:
-          # Refresh-token auth: no password, no salt. See tools/publish/HANDOFF.md.
+          # Refresh-token auth: no password, no salt.
+          # See tools/publish/PDX_API_NOTES.md.
           PDX_REFRESH: ${{ secrets.PDX_REFRESH }}
         run: |
           # Deliberately no --title, --short-description or --description-file:

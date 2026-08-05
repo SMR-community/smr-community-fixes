@@ -1,372 +1,199 @@
-# Paradox Mods upload API — what is known
+# The Paradox Mods upload API
 
-Findings from static analysis of `PDXSDK.dll` (2.6 MB, shipped in the game root)
-and the game's own Lua, for the purpose of publishing **this mod**, from **your
-own account**, without opening the game.
+How `pdx_client.py` publishes mod 154004 without the game. Every route, header
+and field here was verified against the live service, and a real publish has
+gone through it.
 
-**Status: complete and verified against the live service.** Every route, header
-and required field below was exercised for real. The only call never run to
-completion is the final version PUT, whose body was validated by the service
-(it accepted the fields and then failed on a deliberately nonexistent mod id).
+Paradox documents none of this. It can break without notice.
 
-Files here:
+## Why not use the game
 
-```text
-pdx_client.py      the client: session renewal, the upload sequence, per-step
-                   reporting, retry of transient failures only
-capture.py         one command: capture the routes and finish the client
-capture_routes.py  the mitmproxy addon capture.py drives
-finish_routes.py   turns a capture into a filled-in ROUTES table
-```
+`PDX_Upload` in the game's Lua is a thin driver over native functions in
+`PDXSDK.dll`, so no HTTP request is built anywhere you can read or reuse, and a
+hosted runner has neither the game nor the SDK. Hence a direct HTTP client.
 
-The three capture files are only needed if Paradox changes the API. See
-*Afterwards: delete the capture tooling*.
+Host: `https://api.paradox-interactive.com`. The sandbox, staging and test hosts
+named in the DLL have never answered for this game, so there is nothing to
+rehearse against — `--dry-run` is the rehearsal.
 
-**Only the capture needs the game.** `pdx_client.py` speaks HTTP and nothing
-else — it runs on a hosted Linux runner with no game, no SDK and no Paradox
-install. The game is needed exactly once, by one person, because it is the only
-program that already knows the routes. After that nobody needs it again.
+## Authentication
 
-## Where the upload happens
-
-Not in Lua. `PDX_Upload` in `ModTools\Src\CommonLua\Libs\Paradox\ParadoxMods.lua`
-is a thin driver over native functions exported by `PDXSDK.dll`:
+Despite `AuthorizationHawk` in the DLL there is **no HMAC and no request
+signing**. `Authorization` is a JSON object whose single key names the scheme:
 
 ```
-PDX_Upload(mod, params)
-  AsyncPdxGetModDetails      { ModID }                        -> mod details or empty
-  AsyncPdxSetupModForPublish { FolderName? }                  -> { ModName, ModFolderPath }
-  AsyncPdxUploadModAsset     { ModName, FilePath }            -> { FileName }   thumbnail
-  AsyncPdxUploadModAsset     { ModName, FilePath }            -> { FileName }   each screenshot
-  AsyncPdxUploadModContent   { ModName, ModFolderName }       -> { FileName }   the .fpk payload
-  AsyncPdxPublishMod         { ModName, DisplayName, ... }    -> new mod
-  AsyncPublishNewModVersion  { ModId, ... }                   -> new version of an existing mod
+{"renewal":{"token":"<refresh token>"}}   exchange a refresh token
+{"session":{"token":"<session token>"}}   every other call
 ```
 
-Login is native too: `PdxSDK:LogIn(user, pass)` → `AsyncPdxLoginAccount(user, pass)`
-(`ModTools\Src\CommonLua\Libs\Paradox\PdxSDK.lua`).
+**A password cannot be used.** The game's login sends `sha256(password + salt)`,
+where the salt is a random per-account value: it never crosses the wire, it is
+not on disk, and 40+ candidate constructions failed to reproduce a captured
+hash. It is computed inside `PDXSDK.dll`. So no runner can log in with a
+password, however freely the password is shared. This is settled; do not
+re-investigate.
 
-Consequences worth being explicit about:
+The refresh token, in
+`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json` as
+`refreshToken`, replaces it. Both of these were tested, not assumed:
 
-* No HTTP request is constructed anywhere in Lua, so nothing can be copied out.
-* The `-cfg` Lua injection path the game supports is gated behind
-  `not Platform.goldmaster`, so it only works with `MarsDebug.exe`. That rules
-  out driving the retail game from CI even locally.
-* A GitHub-hosted runner has neither the game nor the SDK, which is why this
-  client talks to the service directly instead.
+* **Renewing does not rotate it.** The reply carries no new refresh token.
+* **Logging out does not revoke it.** Logging out of the game blanks
+  `refreshToken` on disk, but the value keeps working: CI authenticated and
+  confirmed edit rights on the mod with the account logged out.
 
-## Hosts
+That is what lets anyone publish at any time. Two consequences:
 
-Extracted from `PDXSDK.dll`:
+* **Read the token out while logged in** — logout erases the only local copy,
+  and only a fresh login mints another.
+* **Logging out is not a revocation.** Treat the token as long-lived.
 
-```
-https://api.paradox-interactive.com            production
-https://sandbox-api.paradox-interactive.com    sandbox
-https://staging-api.paradox-interactive.com    staging
-https://test-api.paradox-interactive.com       test
-```
+## Headers
 
-Telemetry hosts exist alongside each and are irrelevant here.
-
-## Authentication: a JSON Authorization header, not Hawk
-
-The DLL carries `AuthorizationHawk`, `AuthorizationSession`, `AuthorizationSteam`
-and `AuthorizationRenewal` types, which reads like Hawk request signing. It is
-not. **There is no HMAC anywhere.** The `Authorization` header is a JSON object
-whose single key names the scheme:
-
-```
-{"hawk":{"email":…,"sha256(password+salt)":…}}   password login (unusable, see below)
-{"renewal":{"token":"<refresh token>"}}          exchange a refresh token
-{"session":{"token":"<session token>"}}          every other call
-```
-
-So `"hawk"` is only the key name of the password-login object, and the login hash
-is not a signature.
-
-**The password path cannot be reproduced off the machine that logged in.** Login
-sends `sha256(password + salt)` where the salt is a per-account random value:
-it never crosses the wire (a cold-start capture shows no salt fetch before
-login), it is not in the SDK's on-disk store, and 40+ candidate constructions
-failed to reproduce a captured hash. It is computed inside `PDXSDK.dll`. Do not
-pursue it — use a refresh token, which is what the client does.
-
-The refresh token is in
-`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json` as `refreshToken`.
-
-**It survives both renewal and logout**, which is what makes publishing from CI
-possible at all. Tested, not assumed:
-
-* Renewing does not rotate it — the renewal reply carries no new refresh token,
-  and the same value has been renewed repeatedly.
-* Logging out of the game **blanks `refreshToken` in `account.json` but does not
-  revoke it server-side**. The value kept renewing afterwards, and a CI dry run
-  authenticated and confirmed edit rights on the mod while the account was
-  logged out of the game.
-
-So the token is a standing credential, independent of anybody's session. Two
-consequences worth keeping in mind:
-
-* **Copy it out while logged in.** Logging out erases the local copy, and only a
-  fresh login mints another. Nothing warns you.
-* **Logging out is not a revocation.** If the token leaks, logging out does not
-  withdraw it; treat it as long-lived.
-
-## Required headers
-
-Literal in the DLL, and sent on every api-host call:
+Sent on every call to the api host:
 
 ```
 X-PDX-Game-Name      X-PDX-Game-Version    X-PDX-Platform
 X-PDX-SDK-Type       X-PDX-SDK-Version     X-PDX-Error-Version
 ```
 
-Content types in use: `application/json`, `application/octet-stream`.
+### `x-accept-version`, which costs an afternoon
 
-### `x-accept-version` is per-endpoint, and this one wastes an afternoon
+A **bare integer**, and **versioned per endpoint**:
 
-Its value is a **bare integer**, and each endpoint is versioned separately:
-
-| Call | Value | Wrong value gives |
+| Call | Value | A wrong value gives |
 |---|---|---|
-| `PUT /accounts/sessions/{game}` (renew) | header omitted | — |
-| `GET /mods` | `1` (or omitted) | `2` returns 200 with an **empty** `modDetail` |
+| renew | omit the header | — |
+| `GET /mods` | `1` | `2` returns 200 with an **empty** `modDetail` |
 | `POST /mods/presigned-urls` | `2` | `1` returns **404** |
 | `PUT /mods/{modId}/versions` | `2` | `1` returns **404** |
 
-Two traps. A malformed value (`2.0`, `v2`, a date) is rejected as
-`invalid-api-version`, which is at least honest. But a *well-formed* value for
-the wrong endpoint returns a bare `404 not-found`, which reads as a route that
-does not exist — so a correct route can look permanently missing because of a
-header. And version `2` of `GET /mods` answers `200` with nothing in it, so it
-fails silently rather than loudly.
+A malformed value (`2.0`, `v2`) is rejected as `invalid-api-version`, which is
+honest. A well-formed value on the wrong endpoint returns a bare `404`, which
+reads as a route that does not exist — so a correct route can look permanently
+missing when only the header is wrong.
 
-## JSON field names
-
-Recovered as literals, so request bodies can be built with confidence:
+## The five calls
 
 ```
-modId          modName        modVersion      userModVersion
-displayName    shortDescription   longDescription
-displayImagePath   thumbnail   screenshots    screenshotNames
-tags           tagName        externalLinks   fileName
-game           gameName       gameNames       version
-session        sessionToken   refresh_token   userAgent
+1. renew    PUT  /accounts/sessions/surviving_mars_relaunched
+            Authorization: {"renewal":{"token":…}}, no body
+            -> {"session":{"token":…}}
+
+2. read     GET  /mods?arch=Any&modId=154004&os=Windows
+            -> {"result":"OK","modDetail":{…}}
+            modDetail.name is the mod UUID that presign needs. Not `modName`,
+            and not at the top level.
+
+3. presign  POST /mods/presigned-urls
+            {"fileName":…,"gameName":…,"modName":<uuid>}
+            -> {"presignedUrl","contentType","fileName","modName"}
+            Once per file.
+
+4. upload   PUT  <presignedUrl>      raw bytes, S3, no PDX headers, no auth
+
+5. publish  PUT  /mods/154004/versions
+            -> {"result":"OK","state":"publishing","modId":…,"version":N}
 ```
 
-## The protocol, verified
+`DELETE /accounts/sessions/{game}` logs out, and is not needed.
 
-Host `https://api.paradox-interactive.com`. Five calls, in this order:
+## The version PUT
 
-```
-1. renew     PUT  /accounts/sessions/surviving_mars_relaunched   no api version
-             Authorization: {"renewal":{"token":"<refresh>"}}, empty body
-             -> {"session":{"token":"<uuid>",…}}     no new refresh token
-
-2. read      GET  /mods?arch=Any&modId=154004&os=Windows         api version 1
-             -> {"result":"OK","modDetail":{…}}
-             modDetail.name is the mod's UUID, needed as `modName` below.
-             It is NOT `modName` or `Name` at the top level.
-
-3. presign   POST /mods/presigned-urls                           api version 2
-             {"fileName":…,"gameName":…,"modName":<uuid>}
-             -> {"presignedUrl","contentType","fileName","modName"}
-             Once per file: thumbnail, then the content zip.
-
-4. upload    PUT  <presignedUrl>            (S3; no PDX headers, no auth)
-             raw bytes, Content-Type from the presign reply.
-
-5. publish   PUT  /mods/154004/versions                          api version 2
-             -> {"modId","version","state","result"}
-
-   logout (optional)  DELETE /accounts/sessions/surviving_mars_relaunched
-```
-
-### What the version PUT requires
-
-Exactly six fields are mandatory. The service validates them one at a time, and
-**validates before it looks the mod up** — so the full set can be discovered
-safely against a nonexistent mod id, which is how this list was obtained:
+Six fields are mandatory:
 
 ```
-displayName        shortDescription   longDescription
-contentFileName    changelogEntry     recommendedGameVersion
+displayName   shortDescription   longDescription
+contentFileName   changelogEntry   recommendedGameVersion
 ```
 
-Everything else is optional: `thumbnail`, `tags`, `userModVersion`, `arch`,
-`os`, `acl`.
+Optional: `thumbnail`, `tags`, `userModVersion`, `arch`, `os`, `acl`.
 
-**Optional fields are not type-checked.** A deliberately absurd
-`screenshots: 12345` was accepted as readily as a correct value, while a
-required field with the wrong type is caught (`recommendedGameVersion: Must be
-a string`). So passing validation says nothing about an optional field being
-right — it can only be confirmed by publishing and looking at the page.
+**Three of the six are the mod page's own text, so every publish rewrites the
+description.** Anything left blank is published blank. The client therefore
+reads the mod first and sends those values back unchanged unless overridden, and
+echoes the optional fields for the same reason rather than assuming them — the
+live mod is `arch: Any, os: Any`, so a hardcoded `Windows` would have narrowed
+it. `longDescription` is HTML, and holds wording that exists only on the page.
 
-Three of the six are the mod page's own text. That means **every publish
-rewrites the page's description**, and a client that does not supply it blanks
-it. `pdx_client.py` therefore reads the mod (step 2) and sends those values
-back unchanged unless explicitly overridden. The optional fields are echoed back
-for the same reason rather than assumed — the live mod is `arch: Any, os: Any`,
-so hardcoding `os: Windows` would have narrowed it.
+Two behaviours worth knowing:
 
-`longDescription` is HTML (`<p>`, `<strong>`, `<a>`, `<ol>`), not the plain text
-in `metadata.lua`, and it contains wording that exists only on the mod page.
+* **Fields are validated before the mod is looked up.** Aiming a request at a
+  nonexistent mod id reveals the required set one message at a time while having
+  nothing it could publish. That is how the list above was found.
+* **Optional fields are not type-checked.** A deliberately absurd
+  `screenshots: 12345` was accepted, while a required field with a bad type is
+  caught. So a wrong optional field fails silently instead of erroring.
 
-### Images: covers and screenshots
-
-**This repository publishes the cover and nothing else.** The rest of this
-section is recorded for the day someone wants screenshots too.
-
-Both kinds upload identically — presign, then PUT the bytes. Nothing about the
-upload says what kind of image it is; the service files it by **which field of
-the version PUT names it**, into `content/covers/` or `content/screenshots/`,
-and generates the resized variants itself:
-
-```
-displayImagePath  …/content/covers/cover_2.jpg
-screenshots       [ { "image":     …/content/screenshots/screenshot_01.jpg,
-                      "thumbnail": …/content/screenshots/screenshot_01_thumb.jpg } ]
-```
-
-The uploaded file name is kept verbatim, so `screenshot_01.jpg` in this
-repository becomes `screenshot_01.jpg` there.
-
-`screenshots` is definitely the field the service **reads back**, as those
-objects. Which field the request sends them under was never established:
-`screenshotNames` is the likelier of the two, since the DLL carries it as a
-separate literal alongside `screenshots`, but optional fields are not validated,
-so neither could be confirmed without publishing and looking at the page. Expect
-to try `screenshotNames` first and `screenshots` second.
-
-A read of any mod that has screenshots shows the shape; mod ids are global
-across Paradox games, so a neighbouring id works even if it belongs to another
-game.
-
-### Error shape
+### Errors
 
 ```json
 {"result":"Failure","errorCode":"bad-input",
  "errorMessage":"recommendedGameVersion: Must be set","detail":""}
 ```
 
-`result` is always the word `Failure`; `errorMessage` is the part worth reading.
-A client that reports `result` says nothing useful.
+`result` is always `Failure` and says nothing; `errorMessage` is the useful part.
 
-## Re-capturing, if Paradox changes the API
+### Images
 
-There is no certificate pinning in the DLL — the only TLS-adjacent string is an
-OpenSSL path from the bundled PGP library — so an intercepting proxy works.
+This repository publishes the cover and nothing else. Recorded in case
+screenshots are ever wanted:
 
-### Doing the capture
+Covers and screenshots upload identically. Nothing in the upload says which is
+which — the service files an image by **the field of the version PUT that names
+it**, into `content/covers/` or `content/screenshots/`, keeping the filename and
+generating the resized variants itself.
 
-On the machine with the game — Windows, macOS or Linux:
+`screenshots` is what the service reads *back*, as `{image, thumbnail}` URL
+objects. Which field the *request* uses was never established; `screenshotNames`
+is likelier, being a separate DLL literal, but optional fields are not
+validated, so it can only be confirmed by publishing and looking. Try
+`screenshotNames` first, `screenshots` second. Any mod that has screenshots
+shows the read shape, and mod ids are global across Paradox games.
 
-```
-python tools/publish/capture.py
-```
+## If Paradox changes the API
 
-It installs mitmproxy, generates its CA, and prints the commands your platform
-needs to trust it and route traffic through it. On Windows the system proxy is
-also set and restored for you. Upload this mod once from the game's Mod Editor,
-press Ctrl+C, and it fills in `ROUTES`. Confirm with a dry run:
-
-```
-python tools/publish/pdx_client.py --dry-run --payload dist/SMRCF.zip \
-    --thumbnail Images/smr_community_fixes.jpg --version 1 --mod-id 154004 \
-    --changelog "rehearsal"
-```
-
-Only shape is recorded — method, path, header names and body field names. Values,
-including your password, are redacted before anything reaches disk.
-
-A capture records header *names*, so it will show that `x-accept-version` was
-sent but not which integer. Recover the value the way it was found the first
-time: call `GET /mods` with candidate values, since anything malformed comes
-back as `invalid-api-version` and a valid one returns `200`.
-
-The mod already exists as
-[154004](https://mods.paradoxplaza.com/mods/154004/Any), so capturing one
-**update** is enough: it exercises every call this repository will ever make.
-
-`finish_routes.py` will report `publish` as `NOT FOUND`, and that is expected —
-that route creates a *new* mod page, which this repository must never do again.
-Everything else must be filled.
-
-### Afterwards: delete the capture tooling
-
-Once a publish has actually succeeded, **delete `capture.py`,
-`capture_routes.py`, `finish_routes.py` and `routes.json`**. They exist for one
-afternoon's work and are dead weight after it. This file is the record; the
-section above is enough to rebuild them if Paradox ever changes the API.
-
-There is no usable sandbox for this game — the non-production hosts named in the
-DLL have never answered — so the first real publish is the only end-to-end test
-there is.
-
-### Rebuilding the capture by hand
-
-Everything the tooling did, in the order it did it:
+There is no certificate pinning, so an intercepting proxy recovers the routes.
+The tooling that did this originally has been deleted; it was a day's work and
+this file is its output. To redo it:
 
 ```
 pip install mitmproxy
-mitmdump --listen-port 8080            # once, to generate ~/.mitmproxy/
+mitmdump --listen-port 8080     # once, to generate ~/.mitmproxy/
 ```
 
-Trust the CA — `~/.mitmproxy/mitmproxy-ca-cert.pem`:
+Trust `~/.mitmproxy/mitmproxy-ca-cert.pem`, then send the game through the proxy
+and upload the mod once from its Mod Editor:
 
 ```text
 Windows   certutil -addstore -f ROOT "%USERPROFILE%\.mitmproxy\mitmproxy-ca-cert.pem"
+          then Internet Settings -> proxy 127.0.0.1:8080
 macOS     sudo security add-trusted-cert -d -r trustRoot \
               -k /Library/Keychains/System.keychain ~/.mitmproxy/mitmproxy-ca-cert.pem
-Linux     sudo cp ~/.mitmproxy/mitmproxy-ca-cert.pem \
-              /usr/local/share/ca-certificates/mitmproxy.crt && sudo update-ca-certificates
-```
-
-Route the game's traffic through it:
-
-```text
-Windows   Internet Settings → proxy 127.0.0.1:8080, or the ProxyEnable and
-          ProxyServer values under HKCU\Software\Microsoft\Windows\
-          CurrentVersion\Internet Settings
-macOS     sudo networksetup -setwebproxy Wi-Fi 127.0.0.1 8080
           sudo networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 8080
-Linux     launch the game with HTTPS_PROXY=http://127.0.0.1:8080
+Linux     copy the CA into /usr/local/share/ca-certificates and update-ca-certificates
+          launch with HTTPS_PROXY=http://127.0.0.1:8080
 ```
 
-Run `mitmdump` with an addon whose `response(flow)` hook records, for each
-request to `api.paradox-interactive.com`, the method, path, status, header
-*names*, and the *field names* of the request and response bodies — never the
-values, so credentials are not written down. Then upload the mod once from the
-Mod Editor.
+Record only method, path, status, header *names* and body *field names* — never
+values. A capture of a login once leaked an account email, the login hash and
+session tokens into a file because the addon logged a whole header. Match
+requests to calls by method and body field names rather than by path, since the
+path is the unknown. Undo the proxy and remove the CA afterwards
+(`certutil -user -delstore Root mitmproxy`).
 
-Match each captured request to a call by **method and body field names**, never
-by path, since the path is the unknown being recovered:
+A capture cannot give you `x-accept-version`, since it records names and not
+values. Recover it as it was found the first time: send `GET /mods` with
+candidate values until one returns 200 instead of `invalid-api-version`.
 
-```text
-login                POST, body has password
-renew                POST, body has refresh_token
-upload_content       POST, octet-stream, the largest body
-upload_asset         POST, octet-stream
-publish_new_version  POST, body has modId
-publish              POST, body has displayName
-setup_publish        POST, response has modName
-mod_details          GET
-```
+## Risks
 
-Replace the per-call parts of each path with the placeholders `pdx_client.py`
-substitutes: a run of 3+ digits becomes `{mod_id}`, a UUID becomes `{mod_name}`.
-Undo the proxy and CA changes afterwards.
-
-## Risks, stated once
-
-* **Undocumented and unsupported.** Paradox publishes no API contract. Any
-  change on their side breaks this with no notice and no deprecation period.
-  Check their terms before relying on it.
-* **Secrets are readable by every organisation member.** Anyone who can push a
-  workflow can print a secret. Membership of SMR-community is open by invitation
-  and every member can push to `main`, so `PDX_REFRESH` is effectively shared
-  with all of them. It is a refresh token rather than a password, so it is
-  revocable — logging out in the game invalidates it — but it still grants
-  publishing rights to the account. Use a dedicated publishing account.
-* **The token expires eventually.** A publish that fails at `renew` with a 401
-  needs a fresh `refreshToken` from `account.json` and a new `gh secret set`.
+* **Undocumented and unsupported.** Any change on Paradox's side breaks this
+  with no notice. Check their terms before relying on it.
+* **`PDX_REFRESH` is readable by every organisation member**, since anyone who
+  can push a workflow can print a secret, and every member can push to `main`.
+  Logging out does *not* withdraw it, so use a dedicated publishing account that
+  owns nothing else.
+* **The token can stop working.** A publish that fails at `renew` with 401 needs
+  a fresh `refreshToken` and a new `gh secret set PDX_REFRESH`. A dry run
+  reports this before a tag does.
