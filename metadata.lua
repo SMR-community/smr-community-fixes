@@ -27,7 +27,6 @@ return PlaceObj('ModDef', {
 		"Code/smrcf_restore_clustered_lights.lua",
 		"Code/smrcf_restore_mod_screenshots.lua",
 	},
-	'screenshot1', "Mod/SMRCF/Images/screenshot_01.jpg",
 	'saved', 1785879519,
 	'code_hash', -508764141081500062,
 	'pdx_id', 154004,

@@ -177,8 +177,8 @@ displayName        shortDescription   longDescription
 contentFileName    changelogEntry     recommendedGameVersion
 ```
 
-Everything else is optional: `thumbnail`, `screenshotNames`, `tags`,
-`userModVersion`, `arch`, `os`, `acl`.
+Everything else is optional: `thumbnail`, `tags`, `userModVersion`, `arch`,
+`os`, `acl`.
 
 **Optional fields are not type-checked.** A deliberately absurd
 `screenshots: 12345` was accepted as readily as a correct value, while a
@@ -198,10 +198,13 @@ in `metadata.lua`, and it contains wording that exists only on the mod page.
 
 ### Images: covers and screenshots
 
-Both upload identically — presign, then PUT the bytes. Nothing about the upload
-says what kind of image it is; the service files it by **which field of the
-version PUT names it**, into `content/covers/` or `content/screenshots/`, and
-generates the resized variants itself:
+**This repository publishes the cover and nothing else.** The rest of this
+section is recorded for the day someone wants screenshots too.
+
+Both kinds upload identically — presign, then PUT the bytes. Nothing about the
+upload says what kind of image it is; the service files it by **which field of
+the version PUT names it**, into `content/covers/` or `content/screenshots/`,
+and generates the resized variants itself:
 
 ```
 displayImagePath  …/content/covers/cover_2.jpg
@@ -213,12 +216,11 @@ The uploaded file name is kept verbatim, so `screenshot_01.jpg` in this
 repository becomes `screenshot_01.jpg` there.
 
 `screenshots` is definitely the field the service **reads back**, as those
-objects. The request side sends *names*, and the DLL carries a separate
-`screenshotNames` literal for exactly that, which is what the client sends.
-This is the one field in the whole protocol not confirmed by observation —
-optional fields are not validated, so a wrong key here does not error, the
-screenshots simply never appear. If a publish leaves the page without them, send
-the same list under `screenshots` instead.
+objects. Which field the request sends them under was never established:
+`screenshotNames` is the likelier of the two, since the DLL carries it as a
+separate literal alongside `screenshots`, but optional fields are not validated,
+so neither could be confirmed without publishing and looking at the page. Expect
+to try `screenshotNames` first and `screenshots` second.
 
 A read of any mod that has screenshots shows the shape; mod ids are global
 across Paradox games, so a neighbouring id works even if it belongs to another

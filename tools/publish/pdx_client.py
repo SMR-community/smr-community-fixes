@@ -381,7 +381,7 @@ def _read(path: str) -> bytes:
 
 
 def version_body(args: argparse.Namespace, live: dict, thumb: dict,
-                 content: dict, screenshots: list[str]) -> dict:
+                 content: dict) -> dict:
     """The body of the version PUT, defaulting to what the page already shows.
 
     The service makes the page's own text mandatory on every publish, so a
@@ -408,7 +408,7 @@ def version_body(args: argparse.Namespace, live: dict, thumb: dict,
             "command line nor the current mod record supplies one. Publishing "
             "now would blank it on the mod page.")
 
-    body = {
+    return {
         "contentFileName": content["fileName"],
         "thumbnail": thumb["fileName"],
         "displayName": display_name,
@@ -424,20 +424,9 @@ def version_body(args: argparse.Namespace, live: dict, thumb: dict,
         "arch": live.get("arch") or "Any",
         "os": live.get("os") or "Any",
         "acl": live.get("acl") or "public",
+        # No screenshot field is sent. The cover is the only image this
+        # publishes, and naming screenshots is left to the mod page.
     }
-
-    # Which field carries uploaded screenshots is the one thing here not settled
-    # by evidence. The service reads back `screenshots` as {image, thumbnail}
-    # URL objects it generated, and the SDK carries a separate `screenshotNames`
-    # literal, so the request side is names under that key. Optional fields are
-    # not type-checked - a deliberately bogus `screenshots: 12345` was accepted
-    # - so a wrong guess here fails silently by simply not appearing rather than
-    # erroring. If the page shows no screenshots after a publish, send them as
-    # `screenshots` instead; nothing else has to change.
-    if screenshots:
-        body["screenshotNames"] = screenshots
-
-    return body
 
 
 def publish_mod(args: argparse.Namespace) -> int:
@@ -471,17 +460,6 @@ def publish_mod(args: argparse.Namespace) -> int:
         session.upload_to_storage("upload_thumbnail", thumb["presignedUrl"],
                                   _read(args.thumbnail), thumb.get("contentType", ""))
 
-        # Screenshots: identical two steps per file. Nothing about the upload
-        # marks an image as a screenshot rather than a cover - the service files
-        # it by which field of the version PUT names it.
-        screenshots = []
-        for index, path in enumerate(args.screenshot, start=1):
-            shot = session.presign(mod_name, os.path.basename(path))
-            session.upload_to_storage(f"upload_screenshot_{index}",
-                                      shot["presignedUrl"], _read(path),
-                                      shot.get("contentType", ""))
-            screenshots.append(shot["fileName"])
-
         # Content zip: same two steps.
         content_name = os.path.basename(args.payload)
         content = session.presign(mod_name, content_name)
@@ -489,7 +467,7 @@ def publish_mod(args: argparse.Namespace) -> int:
                                   _read(args.payload), content.get("contentType", ""))
 
         result = session.publish_version(
-            args.mod_id, version_body(args, live, thumb, content, screenshots))
+            args.mod_id, version_body(args, live, thumb, content))
     except PdxError as exc:
         session.report.publish(title, args.result_json)
         partial = session.report.reached("upload_content")
@@ -522,11 +500,8 @@ def preflight(args: argparse.Namespace) -> int:
         print("  MISSING PDX_REFRESH")
         ok = False
 
-    for label, path, limit in (
-            ("payload", args.payload, None),
-            ("thumbnail", args.thumbnail, 2 * 1024 * 1024),
-            *[(f"screenshot {index}", shot, 2 * 1024 * 1024)
-              for index, shot in enumerate(args.screenshot, start=1)]):
+    for label, path, limit in (("payload", args.payload, None),
+                               ("thumbnail", args.thumbnail, 2 * 1024 * 1024)):
         if not path or not os.path.exists(path):
             print(f"  MISSING {label} {path}")
             ok = False
@@ -561,10 +536,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Publish the mod to Paradox Mods.")
     parser.add_argument("--payload", required=True, help="packed mod archive")
     parser.add_argument("--thumbnail", required=True, help="cover image, max 2 MB")
-    parser.add_argument("--screenshot", action="append", default=[],
-                        help="screenshot for the mod page, max 2 MB; repeatable. "
-                             "Publishing without any leaves the page's own "
-                             "screenshots untouched")
     # Each of these overrides what the mod page already shows. Left unset, the
     # current value is read from the service and republished unchanged.
     parser.add_argument("--title", default="")
