@@ -101,3 +101,14 @@ ready. See *Publishing to Paradox Mods* in [CONTRIBUTING.md](CONTRIBUTING.md).
 A fix has to point at a confirmed cause in the game's own Lua source — no
 guessing. If you have found a reproducible vanilla bug but not its cause, open an
 issue describing how to reproduce it and which version you saw it on.
+
+**Attach a savegame if you can.** Finding a cause means reproducing the bug, and
+a save that already shows it turns hours of guesswork into minutes.
+
+GitHub rejects `.sav` files, so **put the save in a .zip** and drag that onto the
+issue — zip is accepted, up to 25 MB. If it is larger, link it from anywhere you
+like instead. Saves are in `%APPDATA%\Surviving Mars Relaunched\saves`.
+
+Also useful, in order: the newest log from
+`%APPDATA%\Surviving Mars Relaunched\logs`, the list of other mods you had
+enabled, and a screenshot if the bug is visible.
