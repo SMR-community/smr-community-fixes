@@ -157,7 +157,7 @@ the selected version.
    game version: each one appears only under the versions it was confirmed on,
    declared in its `versions` table, so every game version has its own list and
    no repair runs against a build nobody verified it against. Version `1.0.7`
-   contains Restore Rains, Restore Disasters, and twelve default-off beta fixes.
+   contains Restore Rains, Restore Disasters, and thirteen default-off beta fixes.
    The dropdown contains **All** and **1.0.7**, defaults to `1.0.7` whenever the
    panel opens, and filters only the displayed rows; **All** never changes the
    active runtime target. Later verified versions are added to the data-driven
@@ -479,6 +479,31 @@ When enabled, Restore Clustered Lights must:
 5. Default disabled and emit a timed `Bug fix invoked:` event only when a
    positive vanilla delay is replaced with the atomic turn-on call.
 
+## 5N. [Beta] Restore Mod Screenshots behavior
+
+`ModUI_Entry` derives from `ProtectedPropertyObject`, whose `__newindex` asserts
+on any key the class never declared (`CommonLua\PropertyObject.lua:1819-1823`).
+The class declares `ScreenshotPaths` (`CommonLua\UI\ModManager.lua:1229`) but
+never `ScreenshotUrls`, which line 797 assigns and
+`CommonLua\Libs\Paradox\ParadoxMods.lua:249` reads back. Opening a mod page in
+the Paradox Mods browser therefore asserts, and where asserts halt, the
+`ModsUIDownloadScreenshots` call on line 799 is never reached.
+
+When enabled, Restore Mod Screenshots must:
+
+1. Declare `ScreenshotUrls` on the confirmed v1.0.7 `ModUI_Entry` class as
+   `false`, matching how the neighbouring `ScreenshotPaths` is declared, without
+   wrapping any function or modifying the game installation.
+2. Do nothing when the field is already declared, so a later official
+   declaration is never disturbed.
+3. Remove only a declaration this fix added, and only while it still holds the
+   value this fix wrote, so disabling restores vanilla exactly.
+4. Remain idempotent across enable/disable and code reload, retrying on
+   `GameStateStarting` in case the class did not exist when first enabled, and
+   keep no saved object, timer, or marker.
+5. Default disabled and emit a timed `Bug fix invoked:` event once per enable,
+   only when it actually adds the missing declaration.
+
 ## 6. Configuration and persistence
 
 Framework configuration lives in the local `Config` table inside
@@ -502,7 +527,7 @@ version constant.
 
 Each fix owns its own default and its own diagnostic flag inside its descriptor:
 `default_enabled` (true for Restore Rains and Restore Disasters, false for the
-twelve betas) and `debug = false` for the publish build. A fix's inline logger
+thirteen betas) and `debug = false` for the publish build. A fix's inline logger
 emits Info only while its own `debug` is true; `ERROR` is never gated. Setting
 `Config.DEBUG_LOGS = true` also turns on every fix's `debug` when the framework
 adopts the registry, which produces a full diagnostic build in one edit.
@@ -610,8 +635,8 @@ the engine's item-selection translation assertion.
       open, filters the current version's rows case-insensitively against their
       visible labels and descriptions, and updates the shown count. Clear restores
       all rows for the current version.
-- [ ] All fourteen permanent numbers appear in the left column for `1.0.7`; the
-      last twelve are followed by a separate **[Beta]** badge. All right-column
+- [ ] All fifteen permanent numbers appear in the left column for `1.0.7`; the
+      last thirteen are followed by a separate **[Beta]** badge. All right-column
       titles are unnumbered.
 - [ ] Changing the version filter rebuilds the visible rows immediately, **All**
       does not change the active `1.0.7` runtime target, and reopening the panel
@@ -763,7 +788,7 @@ the engine's item-selection translation assertion.
    Confirm the **SMR Community Fixes** display title is slightly larger than **Search:**
    while retaining its earlier blue-gray color.
 4. If persistent storage previously selected `unsupported`, reopen the checklist
-   and confirm it now normalizes to `1.0.7` with all fourteen fix rows available.
+   and confirm it now normalizes to `1.0.7` with all fifteen fix rows available.
 5. Select **All** and confirm all catalog rows are shown without changing the
    active runtime target. Close and reopen the panel and confirm the filter
    defaults back to `1.0.7`.
@@ -771,7 +796,7 @@ the engine's item-selection translation assertion.
    confirm it is still enabled. Repeat using Escape.
 7. Toggle Restore Rains off, press Apply, and confirm the panel stays open and
    shows it disabled. Close and reopen the panel and confirm it persisted.
-8. Stage changes to all fourteen fixes, press Apply, and confirm they commit together.
+8. Stage changes to all fifteen fixes, press Apply, and confirm they commit together.
    Confirm the first two left columns show checkbox + **001** and checkbox +
    **002**, while their right-column titles are **Restore Disasters** and
    **Restore Rains** under both filters. Confirm each beta row shows checkbox +
@@ -785,7 +810,7 @@ the engine's item-selection translation assertion.
    group, Apply, Reset, Back; all labels are centered; the toolbar summary reads
    `14 shown / 14 total / <n> selected` and updates with staged checkbox changes;
    and no numeric fix count appears below the list.
-9. Open the checklist and confirm all fourteen rows render: checkbox, number,
+9. Open the checklist and confirm all fifteen rows render: checkbox, number,
    `[Beta]` badge on 003-014, then the plain-text title above its explanation. No
    `Translate` assertion or missing-text row may appear, and no forecast box or
    diagnostic overlay may appear anywhere during play.
@@ -830,18 +855,18 @@ the engine's item-selection translation assertion.
     assertion occurred with Restore Clustered Lights enabled and disabled.
 24. On a disposable mod copy, remove `Code/smrcf_restore_rains.lua` and its matching
     `metadata.lua` and `items.lua` entries, reload the mod, and confirm the panel
-    contains the thirteen remaining fixes, **001** remains beside Restore Disasters'
+    contains the fourteen remaining fixes, **001** remains beside Restore Disasters'
     checkbox, and no load error occurs.
 25. Reopen the checklist and confirm Search is blank and Game version visibly
     reads `1.0.7`. Search for text unique to Restore Rains and Restore Disasters;
     confirm the visible rows and shown count update case-insensitively. Press
-    Clear and confirm all fourteen rows return. Confirm the slim right scrollbar
-    appears for the fourteen-row catalog, mouse-wheel and thumb scrolling reach the
+    Clear and confirm all fifteen rows return. Confirm the slim right scrollbar
+    appears for the fifteen-row catalog, mouse-wheel and thumb scrolling reach the
     last row, and the bar auto-hides after filtering the list down to rows that
     fit. Confirm the viewport shows five rows simultaneously when those five
     descriptions each fit on one line. Repeat at a second resolution or UI-scale
     setting and confirm the viewport remains 60% of the active desktop height.
-26. On a disposable v1.0.7 game, confirm all twelve **[Beta]** rows start
+26. On a disposable v1.0.7 game, confirm all thirteen **[Beta]** rows start
     unchecked. Enable Restore Dust Devils, use a non-100% Dust Devil preset, and
     confirm each natural opportunity performs a percentage roll followed by an
     integer spawn count only on success. Switch to another map during a cycle and
@@ -928,7 +953,7 @@ Phase 1 (community release): one framework file plus one self-contained file per
                         fix; dedicated SMR Community Fixes checklist with panel-local
                         version filter and staged persistent toggles; Restore
                         Rains scheduler/state/Cloud Seeding repair; Restore
-                        Disasters meteor-state cleanup; and twelve explicitly
+                        Disasters meteor-state cleanup; and thirteen explicitly
                         labeled default-off v1.0.7 beta fixes.
 Future phases:          add only independently verified v1.0.7 fixes, each as one
                         new self-contained file. Anything that is neither the

@@ -59,4 +59,8 @@ return {
 		'name', "smrcf_restore_clustered_lights",
 		'CodeFileName', "Code/smrcf_restore_clustered_lights.lua",
 	}),
+	PlaceObj('ModItemCode', {
+		'name', "smrcf_restore_mod_screenshots",
+		'CodeFileName', "Code/smrcf_restore_mod_screenshots.lua",
+	}),
 }
