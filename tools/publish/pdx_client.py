@@ -71,12 +71,10 @@ ACCEPT_VERSION = "2.0"
 # Routes recovered from the capture. Each is (METHOD, PATH); {placeholders} are
 # filled per call. `renew` is the one still unknown - see module docstring.
 ROUTES: dict[str, tuple[str, str] | None] = {
-    # TODO(capture): refresh token -> session token. The renewal endpoint never
-    # fired in capture because every session was valid. The DLL has an
-    # `AuthorizationRenewal` type and a `renewal` string; expect something like
-    # ("POST", "/accounts/sessions/" + GAME_NAME + "/renew") carrying the
-    # refresh token. Left None so the client stops cleanly here.
-    "renew": None,
+    # Confirmed live: PUT with Authorization {"renewal":{"token":<refresh>}} and
+    # no body returns {"session":{"token":<session>,…}}. The response carries no
+    # new refresh token, so the stored one does not rotate.
+    "renew": ("PUT", "/accounts/sessions/" + GAME_NAME),
     "logout": ("DELETE", "/accounts/sessions/" + GAME_NAME),
     "mod_details": ("GET", "/mods"),                     # + ?arch=&modId=&os=
     "presign": ("POST", "/mods/presigned-urls"),
@@ -298,23 +296,22 @@ class PdxSession:
     # -- API surface -------------------------------------------------------
 
     def establish_session(self, refresh_token: str) -> None:
-        """Exchange a refresh token for a session token via the renewal call."""
+        """Exchange a refresh token for a session token via the renewal call.
+
+        Confirmed shape: PUT the sessions endpoint with the refresh token in the
+        Authorization object under the `renewal` discriminator, and no body. The
+        response `session.token` is the working session token; no refresh token
+        comes back, so the stored one is reused unchanged.
+        """
         self.auth.refresh_token = refresh_token
-        method, path = _route("renew")  # raises cleanly while unknown
-        # TODO(capture): confirm the request shape. Most likely the refresh
-        # token goes in the Authorization header as {"session":{"token":…}} or a
-        # {"renewal":{…}} object, possibly with an empty body. Adjust once seen.
+        method, path = _route("renew")
         headers = dict(PDX_HEADERS)
-        headers["Authorization"] = json.dumps({"session": {"token": refresh_token}})
-        headers["x-accept-version"] = ACCEPT_VERSION
+        headers["Authorization"] = json.dumps({"renewal": {"token": refresh_token}})
         data = self._call("renew", method, self.base + path, headers=headers)
-        session = (data or {}).get("session", {})
-        token = session.get("token")
+        token = (data or {}).get("session", {}).get("token")
         if not token:
             raise PdxError("renew", "renewal returned no session token")
         self.auth.session_token = token
-        # A rotated refresh token, if the response carries one, is worth surfacing.
-        self.auth.refresh_token = session.get("refresh_token", refresh_token)
 
     def mod_details(self, mod_id: int) -> dict:
         return self._api("mod_details", "mod_details",
