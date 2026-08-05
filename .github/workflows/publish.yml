@@ -34,6 +34,12 @@ concurrency:
   group: publish
   cancel-in-progress: false
 
+env:
+  # https://mods.paradoxplaza.com/mods/154004/Any - the existing mod page.
+  # Without this the client would publish a NEW mod instead of a new version of
+  # this one, leaving players on a page that never updates again.
+  PDX_MOD_ID: "154004"
+
 jobs:
   publish:
     name: Pack and publish
@@ -99,6 +105,7 @@ jobs:
             --title "SMR Community Fixes" \
             --short-description "A community-maintained collection of bug fixes for Surviving Mars: Relaunched." \
             --version "$VERSION" \
+            --mod-id "$PDX_MOD_ID" \
             --env "${{ inputs.env || 'prod' }}" \
             ${{ inputs.dry_run && '--dry-run' || '' }}
 

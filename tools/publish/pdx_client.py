@@ -451,6 +451,13 @@ def preflight(args: argparse.Namespace) -> int:
     """Check everything that does not need a route, and report. Never sends."""
     ok = True
 
+    if args.mod_id:
+        print(f"  ok      updating existing mod {args.mod_id}")
+    else:
+        print("  WARN    no --mod-id: this would publish a NEW mod page, not a "
+              "new version of the existing one")
+        ok = False
+
     for name in ("PDX_USER", "PDX_PASS"):
         value = os.environ.get(name)
         if value:

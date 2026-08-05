@@ -135,9 +135,13 @@ python tools/publish/pdx_client.py --dry-run --payload dist/SMRCF.zip \
 Only shape is recorded — method, path, header names and body field names. Values,
 including your password, are redacted before anything reaches disk.
 
-A first publication and an update of an existing mod use different calls
-(`publish` versus `publish_new_version`), so capture both to fill every route.
-`finish_routes.py` names any it did not see.
+The mod already exists as
+[154004](https://mods.paradoxplaza.com/mods/154004/Any), so capturing one
+**update** is enough: it exercises every call this repository will ever make.
+
+`finish_routes.py` will report `publish` as `NOT FOUND`, and that is expected —
+that route creates a *new* mod page, which this repository must never do again.
+Everything else must be filled.
 
 ## Risks, stated once
 
