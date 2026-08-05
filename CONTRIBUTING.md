@@ -91,6 +91,25 @@ position, as all shipped fixes do.
 (master switch, version gate, player's checkbox); your file decides *what*
 happens when it does.
 
+### Switching off has to be complete
+
+`set_enabled(false)` must put the game back exactly as your fix found it, with no
+restart. Unchecking a fix calls it, and so does switching the whole mod off in the
+Mod Manager: the framework hears the game's `ModUnloadLua` message and stands
+every fix down while there is still code here to do it. Nothing the mod changed
+lives in the mod — it is all wrappers and fields inside the game's own globals and
+classes, and none of it would disappear on its own.
+
+So whatever you install, be able to remove: reinstall the captured function,
+delete a field you declared, stop a thread you started. The one thing you should
+not undo is a repair already made to the saved game. That is a state the game
+could legitimately have reached, and reverting it would be a second bug.
+
+Note also that a hook must be installed with a plain assignment, never
+`rawset(_G, ...)`. Inside a mod, `_G` is the mod's own environment table: reads
+fall through to the real globals, but a `rawset` writes only into that table,
+where the game will never see it — and nothing reports the mistake.
+
 ## Game versions
 
 Fixes are separated by game version. Each one belongs to the version it was

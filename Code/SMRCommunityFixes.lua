@@ -822,6 +822,38 @@ function Catalog.ApplyAll(reason)
 	return all_ok
 end
 
+-- Stands every fix down, handing the game back exactly as it was found.
+--
+-- Turning a single fix off already restores what that fix changed; this is for the
+-- moment the whole mod goes away, which is the one case a fix cannot handle for
+-- itself. Everything this mod changes lives in the game's own globals and classes,
+-- so it has to be given back while there is still code here to do it.
+--
+-- Saved choices are deliberately not touched. quiesce reverses the runtime change
+-- and nothing else, so switching the mod back on restores exactly the fixes that
+-- were on before.
+function Catalog.QuiesceAll(reason)
+	local all_ok = true
+	for _, entry in ipairs(Mod.entries) do
+		if type(entry.quiesce) == "function" then
+			local ok, result = pcall(entry.quiesce, reason)
+			if ok ~= true or result == false then
+				all_ok = false
+				DebugLog.Error("Registry", "Could not stand a bug fix down", {
+					fix_id = entry.id,
+					reason = reason,
+					error = ok == true and nil or result,
+				})
+			end
+		end
+	end
+	DebugLog.Info("Registry", "Stood every bug fix down", {
+		reason = reason,
+		fixes = #Mod.entries,
+	}, "DEBUG_UI")
+	return all_ok
+end
+
 --------------------------------------------------------------------------------
 -- Options category
 --------------------------------------------------------------------------------
@@ -885,6 +917,23 @@ function OptionsPatch.Apply(reason)
 		reason = reason,
 		index = insert_index,
 		credits_found = credits_index ~= nil,
+	}, "DEBUG_UI")
+	return true
+end
+
+-- Takes the category back out, so an unloaded mod does not leave a row in Options
+-- whose only action is to call code that no longer exists. bf_owner is checked
+-- rather than the id alone, so a category this mod did not insert is left alone.
+function OptionsPatch.Remove(reason)
+	local categories = rawget(_G, "OptionsCategories")
+	if type(categories) ~= "table" then return true end
+	local index, category = find_category(categories, CATEGORY_ID)
+	if not category or category.bf_owner ~= Config.MOD_ID then return true end
+	table.remove(categories, index)
+	Mod.options.category = nil
+	DebugLog.Info("Options", "Removed the SMR Community Fixes category", {
+		reason = reason,
+		index = index,
 	}, "DEBUG_UI")
 	return true
 end
@@ -1858,6 +1907,35 @@ end
 function OnMsg.DoneGame()
 	Catalog.Notify("DoneGame", "DoneGame")
 	close_panel("DoneGame")
+end
+
+-- Hands the game back before this mod's Lua is taken away.
+--
+-- Everything the mod changes is a wrapper or a field inside the game's own
+-- globals and classes, and none of that disappears just because the mod does. Left
+-- alone, a wrapper would go on being called with the code behind it unloaded, and
+-- Options would keep a row that leads nowhere. So this is the last chance to undo
+-- it, and it is taken.
+--
+-- Only the runtime change is undone. Saved choices stay exactly as they are, so
+-- switching the mod back on restores the same set of fixes.
+function Mod.Unload(reason)
+	local ok = Catalog.QuiesceAll(reason)
+	OptionsPatch.Remove(reason)
+	close_panel(reason)
+	DebugLog.Info("Lifecycle", "Stood down before this mod's Lua was unloaded", {
+		reason = reason,
+		ok = ok,
+	}, nil)
+	return ok
+end
+
+-- Fired by the game just before it unloads a mod that has Lua, which is what
+-- happens when the mod is switched off in the Mod Manager. It names the mod, so
+-- another mod being unloaded does not stand this one down.
+function OnMsg.ModUnloadLua(mod_id)
+	if mod_id ~= Config.MOD_ID then return end
+	Mod.Unload("ModUnloadLua")
 end
 
 return Mod
