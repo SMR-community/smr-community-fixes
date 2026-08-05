@@ -24,10 +24,10 @@
 -- In WaitDownloadModScreenshots, mod_prefix (line 222), err and temp (line 224)
 -- are locals of the `if thumbnailUrl then` block. The screenshot block below it
 -- uses all three anyway, so they resolve as globals: temp and err create new
--- globals, which the mod environment asserts on
--- (CommonLua/Classes/Mod.lua:1560), and mod_prefix reads back nil, so
--- `mod_prefix .. "_" .. i` at line 257 cannot build a path at all. The engine's
--- own comment above it reads "todo: this is not working".
+-- globals, which MarsDebug asserts on (CommonLua/Core/autorun.lua:44), and
+-- mod_prefix reads back nil, so `mod_prefix .. "_" .. i` at line 257 cannot
+-- build a path. The engine's own comment above it reads "todo: this is not
+-- working".
 --
 -- Fault 1 is what keeps fault 2 hidden: with ScreenshotUrls never stored, `urls`
 -- is nil and the broken block never runs. Repairing only the declaration - which
@@ -38,25 +38,22 @@
 -- Declaring the field is unchanged: the field is added to the class exactly as
 -- ScreenshotPaths is declared, so the assignment stops being a new key.
 --
--- For the download, the mod environment blocks io, AsyncWebRequest,
--- AsyncStringToFile and AsyncFileRename (Mod.lua ModEnvBlacklist), so the
--- vanilla body cannot simply be rewritten here - the thumbnail half is
--- unreachable from a mod. Vanilla therefore still does the thumbnail, with the
--- URLs hidden from it for the duration of that one call so its broken block
--- cannot run, and this fix then performs the screenshot download vanilla
--- intended, using the calls a mod may make.
+-- For the download, a mod cannot call AsyncPopsDownloadFile or read
+-- PdxModsScreenshotsPath - ParadoxMods.lua blacklists both for mod environments
+-- (ModBlacklistGather / ModBlacklistPrefixes with prefixes.AsyncPops). Rewriting
+-- the body here is therefore impossible. Instead, while Loading is still true
+-- (ModsLoadCode runs before Autorun clears it), three placeholder globals are
+-- created with the exact names vanilla's broken block writes: temp, err, and
+-- mod_prefix. Later assignments no longer assert. Immediately before each
+-- vanilla call that has ScreenshotUrls, mod_prefix is set to the path prefix
+-- vanilla meant to compute at line 222, so the screenshot loop can build
+-- file paths and the real WaitDownloadModScreenshots - running in the game
+-- environment, not the mod one - can finish the download it already knows how
+-- to do.
 --
--- Two differences from what vanilla's code was reaching for, both forced by the
--- blocked calls and neither visible to a player:
---   * files download straight to their final path rather than to a temporary
---     one that is renamed, because AsyncFileRename is blocked;
---   * a file already on disk cannot be detected, because io and
---     AsyncGetFileAttribute are both blocked, so a per-session record of what
---     has been fetched stands in for vanilla's io.exists check.
---
--- Left alone: the thumbnail half, including its own shadowed `err` at line 228
--- that makes the outer `err` always nil. That is a separate fault with a
--- separate effect, and correcting it here would change thumbnail behaviour.
+-- If the prefix cannot be built, ScreenshotUrls are hidden for that one call so
+-- the broken block never runs; the thumbnail still downloads and there is no
+-- assert, only missing screenshots.
 
 local FIX = {
 	id = "restore_mod_screenshots",
@@ -72,6 +69,8 @@ local FIX = {
 local CLASS_NAME = "ModUI_Entry"
 local FIELD_NAME = "ScreenshotUrls"
 local DOWNLOAD_FN = "WaitDownloadModScreenshots"
+-- Copied from ParadoxMods.lua:281. The real global is blacklisted for mods.
+local SCREENSHOTS_PATH = "AppData/PdxModsScreenshots/"
 
 local function describe(value, depth)
 	depth = depth or 0
@@ -112,6 +111,36 @@ if RestoreModScreenshots == nil then
 	rawset(_G, "SMRCFRestoreModScreenshots", RestoreModScreenshots)
 end
 
+-- Vanilla's screenshot block writes these as undeclared globals. Create them
+-- once while Loading is still true so MarsDebug's __newindex does not assert
+-- on the later assignments. Harmless placeholders when the fix is off: without
+-- the ScreenshotUrls field, the broken block never runs. Returns false only when
+-- a needed name is still missing and can no longer be created.
+local function ensure_vanilla_globals()
+	local loading = rawget(_G, "Loading") == true
+	local persistable = rawget(_G, "PersistableGlobals")
+	local function seed(name)
+		if rawget(_G, name) ~= nil then return true end
+		if loading == true then
+			if name == "temp" then temp = false
+			elseif name == "err" then err = false
+			else mod_prefix = false end
+			return rawget(_G, name) ~= nil
+		end
+		-- After Loading, new globals assert unless listed in PersistableGlobals.
+		if type(persistable) == "table" then
+			persistable[name] = true
+			if name == "temp" then temp = false
+			elseif name == "err" then err = false
+			else mod_prefix = false end
+			return rawget(_G, name) ~= nil
+		end
+		return false
+	end
+	return seed("temp") and seed("err") and seed("mod_prefix")
+end
+ensure_vanilla_globals()
+
 -- Whether this module is the one that added the field, plus the captured vanilla
 -- download function and this fix's wrapper. Kept in SharedModEnv so a Lua reload
 -- cannot lose track and leave the field behind, remove a field the game itself
@@ -120,22 +149,23 @@ end
 local shared = rawget(_G, "SharedModEnv")
 local previous_hooks = type(shared) == "table" and shared.SMRCF_ModScreenshotsHooks or nil
 local Hooks
-if type(previous_hooks) == "table" and previous_hooks.protocol == 2 then
+if type(previous_hooks) == "table" then
+	-- Same table the installed wrapper closes over. Update it in place so a
+	-- Lua reload replaces Hooks.impl without leaving a stale wrapper on the
+	-- global, and discard fields from older protocols (e.g. fetched).
 	Hooks = previous_hooks
+	Hooks.protocol = 3
+	Hooks.fetched = nil
 else
 	Hooks = {
-		protocol = 2,
+		protocol = 3,
 		declared_by_us = false,
 		enabled = false,
 		original = rawget(_G, DOWNLOAD_FN),
 		wrapper = false,
 		in_call = false,
-		-- What has already been fetched this session, keyed by file prefix.
-		-- Stands in for vanilla's io.exists, which a mod cannot call.
-		fetched = {},
 	}
 end
-if type(Hooks.fetched) ~= "table" then Hooks.fetched = {} end
 
 local current_download = rawget(_G, DOWNLOAD_FN)
 if current_download ~= Hooks.wrapper and type(current_download) == "function" then
@@ -239,27 +269,24 @@ function RestoreModScreenshots.RemoveField(reason)
 	return true
 end
 
--- The file prefix vanilla builds at ParadoxMods.lua:222, computed here without
--- depending on the thumbnail block having run. Returns nil when the mod carries
--- nothing to build a path from, which is the caller's signal to leave it alone.
+-- The file prefix vanilla builds at ParadoxMods.lua:222. PdxModsScreenshotsPath
+-- is blacklisted for mods, so the published constant is used when the global
+-- cannot be read.
 local function screenshot_prefix(mod)
 	local base = rawget(_G, "PdxModsScreenshotsPath")
+	if type(base) ~= "string" then base = SCREENSHOTS_PATH end
 	local pdx = mod and mod.Pdx
 	local mod_id = pdx and pdx.ModID
-	if type(base) ~= "string" or mod_id == nil then return nil end
+	if mod_id == nil then return nil end
 	local preferred = pdx.PreferredVersion
 	local version = (preferred and preferred ~= "") and ("_" .. preferred) or "_1"
 	return base .. mod_id .. version
 end
 
--- The repair for fault 2, standing in for the screenshot half of
--- WaitDownloadModScreenshots.
---
--- Vanilla still runs, because only it can do the thumbnail - the calls that half
--- needs are blocked for mods. Its screenshot block is skipped by hiding the URLs
--- for the length of that one call, which is the whole reason this fix can leave
--- the thumbnail untouched. The URLs go back before anything else looks at the
--- mod, including when vanilla raises.
+-- The repair for fault 2: seed the three globals vanilla's screenshot block
+-- treats as in-scope, set mod_prefix to the value that block needs, then let
+-- the real WaitDownloadModScreenshots finish both the thumbnail and the
+-- screenshots in the game environment where AsyncPopsDownloadFile exists.
 function RestoreModScreenshots.CorrectedDownload(mod)
 	local urls = mod and mod.ScreenshotUrls
 	if type(urls) ~= "table" or #urls == 0 then
@@ -268,59 +295,31 @@ function RestoreModScreenshots.CorrectedDownload(mod)
 	end
 
 	local prefix = screenshot_prefix(mod)
-	local split_path = rawget(_G, "SplitPath")
-	local to_os_path = rawget(_G, "ConvertToOSPath")
-	local download = rawget(_G, "AsyncPopsDownloadFile")
-	if prefix == nil or type(split_path) ~= "function" or
-		type(to_os_path) ~= "function" or type(download) ~= "function"
-	then
-		log("ERROR", "Required v1.0.7 API is unavailable; screenshots left to vanilla", {
+	if prefix == nil or ensure_vanilla_globals() ~= true then
+		-- Cannot feed the globals the broken block needs; hide URLs so it is
+		-- skipped. Thumbnail still downloads; screenshots stay missing.
+		log("ERROR", "Cannot unblock screenshot download; screenshots skipped", {
+			mod_id = mod and mod.ModID,
+			has_pdx = mod and mod.Pdx ~= nil,
 			has_prefix = prefix ~= nil,
-			has_split_path = type(split_path) == "function",
-			has_convert = type(to_os_path) == "function",
-			has_download = type(download) == "function",
 		})
-		return call_original(mod)
+		mod.ScreenshotUrls = nil
+		local ok, failure = pcall(call_original, mod)
+		mod.ScreenshotUrls = urls
+		if ok ~= true then error(failure) end
+		return
 	end
 
-	mod.ScreenshotUrls = nil
+	-- Plain assignment: ModEnvMeta.__newindex writes the real global that
+	-- WaitDownloadModScreenshots (game _ENV) will read.
+	mod_prefix = prefix
 	local ok, failure = pcall(call_original, mod)
-	mod.ScreenshotUrls = urls
 	if ok ~= true then error(failure) end
-
-	local cached = Hooks.fetched[prefix]
-	if type(cached) == "table" and #cached == #urls then
-		mod.ScreenshotPaths = cached
-	else
-		local paths = {}
-		for i = 1, #urls do
-			local url = urls[i]
-			local _, _, ext = split_path(url)
-			local file_path = prefix .. "_" .. i .. (ext or "")
-			local failed = download(url, to_os_path(file_path))
-			if failed then
-				log("ERROR", "Downloading screenshot failed", {
-					mod_id = mod.ModID,
-					index = i,
-					error = tostring(failed),
-				})
-			else
-				paths[#paths + 1] = file_path
-			end
-		end
-		Hooks.fetched[prefix] = paths
-		mod.ScreenshotPaths = paths
-	end
-
-	local msg = rawget(_G, "Msg")
-	if type(msg) == "function" then
-		msg("PopsModsScreenshotsDownloaded", mod)
-	end
 
 	if RestoreModScreenshots.download_reported ~= true then
 		RestoreModScreenshots.download_reported = true
-		log("INFO", "Bug fix invoked: downloaded the mod's screenshots", correction_context({
-			repair = "download_screenshots",
+		log("INFO", "Bug fix invoked: unblocked WaitDownloadModScreenshots", correction_context({
+			repair = "seed_screenshot_globals",
 			reason = "WaitDownloadModScreenshots uses mod_prefix, err and temp outside the block that declares them",
 			mod_id = mod.ModID,
 			screenshots = #urls,
@@ -351,6 +350,7 @@ function RestoreModScreenshots.InstallHook(reason)
 	-- environment table: reads fall through to the real globals, but a rawset
 	-- writes only into that table, where the game would never see it. An
 	-- assignment goes through ModEnvMeta.__newindex, which writes the real one.
+	ensure_vanilla_globals()
 	WaitDownloadModScreenshots = Hooks.wrapper
 	Hooks.enabled = true
 	log("INFO", "Installed screenshot download hook", { reason = reason })
