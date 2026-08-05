@@ -244,7 +244,11 @@ function RestoreClusteredLights.InstallHook(reason)
 			})
 		return false
 	end
-	rawset(_G, "NightLightsOn", Hooks.wrapper)
+	-- Plain assignment, never rawset. Inside a mod, _G is the mod's own
+	-- environment table: reads fall through to the real globals, but a rawset
+	-- writes only into that table, where the game would never see it. An
+	-- assignment goes through ModEnvMeta.__newindex, which writes the real one.
+	NightLightsOn = Hooks.wrapper
 	Hooks.enabled = true
 	RestoreClusteredLights.enabled = true
 	log_api("NightLightsOn", true, {
@@ -267,7 +271,7 @@ function RestoreClusteredLights.RestoreHook(reason)
 	Hooks.enabled = false
 	RestoreClusteredLights.enabled = false
 	if rawget(_G, "NightLightsOn") == Hooks.wrapper then
-		rawset(_G, "NightLightsOn", Hooks.original)
+		NightLightsOn = Hooks.original
 	end
 	log("INFO",
 		"Restored captured night-light transition function", {

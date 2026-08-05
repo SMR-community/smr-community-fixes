@@ -347,7 +347,11 @@ function RestoreModScreenshots.InstallHook(reason)
 		Hooks.original = current_fn
 		Hooks.original_may_contain_wrapper = true
 	end
-	rawset(_G, DOWNLOAD_FN, Hooks.wrapper)
+	-- Plain assignment, never rawset. Inside a mod, _G is the mod's own
+	-- environment table: reads fall through to the real globals, but a rawset
+	-- writes only into that table, where the game would never see it. An
+	-- assignment goes through ModEnvMeta.__newindex, which writes the real one.
+	WaitDownloadModScreenshots = Hooks.wrapper
 	Hooks.enabled = true
 	log("INFO", "Installed screenshot download hook", { reason = reason })
 	return true
@@ -360,7 +364,7 @@ end
 function RestoreModScreenshots.RestoreHook(reason)
 	Hooks.enabled = false
 	if rawget(_G, DOWNLOAD_FN) == Hooks.wrapper then
-		rawset(_G, DOWNLOAD_FN, Hooks.original)
+		WaitDownloadModScreenshots = Hooks.original
 	end
 	RestoreModScreenshots.download_reported = false
 	log("INFO", "Restored captured screenshot download", { reason = reason })
