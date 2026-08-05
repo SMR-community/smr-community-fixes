@@ -41,11 +41,14 @@ body:
     attributes:
       label: Savegame link
       description: >
-        Saves live in %APPDATA%\Surviving Mars Relaunched\saves and are usually
-        over GitHub's 25 MB attachment limit — a .sav is already compressed, so
-        zipping it barely helps. Upload it anywhere (Drive, Dropbox, MEGA) and
-        paste the link. Under 25 MB, zip it and drag it into the box below
-        instead; GitHub refuses a bare .sav but accepts a zip.
+        Saves are in the "saves" folder of the game's data directory —
+        %APPDATA%\Surviving Mars Relaunched on Windows,
+        ~/Library/Application Support/... on macOS,
+        ~/.local/share/... on Linux. They are usually over GitHub's 25 MB
+        attachment limit, and a .sav is already compressed so zipping barely
+        helps. Upload it anywhere (Drive, Dropbox, MEGA) and paste the link.
+        Under 25 MB, zip it and drag it into the box below instead; GitHub
+        refuses a bare .sav but accepts a zip.
     validations:
       required: false
 
@@ -63,7 +66,7 @@ body:
     attributes:
       label: Log, screenshots, anything else
       description: >
-        The newest log from %APPDATA%\Surviving Mars Relaunched\logs helps, and
-        so does a screenshot if the bug is visible. Drag files in here.
+        The newest log from the "logs" folder of that same game data directory
+        helps, and so does a screenshot if the bug is visible. Drag files here.
     validations:
       required: false

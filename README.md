@@ -129,9 +129,16 @@ issue describing how to reproduce it and which version you saw it on.
 **Attach a savegame if you can.** Finding a cause means reproducing the bug, and
 a save that already shows it turns hours of guesswork into minutes.
 
-Saves are in `%APPDATA%\Surviving Mars Relaunched\saves`. Most are **too big to
-attach** — GitHub caps attachments at 25 MB, and a `.sav` is already compressed,
-so zipping it barely helps. So:
+Saves live in the game's data folder, under `saves`:
+
+```text
+Windows   %APPDATA%\Surviving Mars Relaunched
+macOS     ~/Library/Application Support/Surviving Mars Relaunched
+Linux     ~/.local/share/Surviving Mars Relaunched
+```
+
+Most are **too big to attach** — GitHub caps attachments at 25 MB, and a `.sav`
+is already compressed, so zipping it barely helps. So:
 
 * **Upload it anywhere and paste the link** — Drive, Dropbox, MEGA, whatever you
   already use. This is the normal way; nobody minds.
@@ -140,6 +147,5 @@ so zipping it barely helps. So:
 * **No file host?** Split the zip into parts below 25 MB, rename each part to end
   in `.zip`, and attach them all. Ugly, but it needs no account anywhere.
 
-Also useful, in order: the newest log from
-`%APPDATA%\Surviving Mars Relaunched\logs`, the list of other mods you had
-enabled, and a screenshot if the bug is visible.
+Also useful, in order: the newest log from `logs` in that same folder, the list
+of other mods you had enabled, and a screenshot if the bug is visible.

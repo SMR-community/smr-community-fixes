@@ -173,8 +173,9 @@ CI does this rather than the mod itself because the engine sandbox blocks `io`,
 
 ## Publishing to Paradox Mods
 
-The mod page is updated from GitHub, not from the game's Mod Editor. Merging
-does not publish. Pushing a version tag does:
+The mod page is updated from GitHub, not from the game's Mod Editor. Publishing
+needs no game installed anywhere — it runs on a hosted Linux runner and talks to
+Paradox over HTTP. Merging does not publish. Pushing a version tag does:
 
 ```
 git tag v2
@@ -238,8 +239,10 @@ reaches every subscriber's game.
 1. Enable your fix, reproduce the bug, confirm it is gone.
 2. Disable it, confirm vanilla behavior returns.
 3. Load a save made before your fix existed, confirm nothing breaks.
-4. Check the newest log in `%APPDATA%\Surviving Mars Relaunched\logs` for Lua
-   errors and asserts, and confirm your fix stays silent while `debug = false`.
+4. Check the newest log in the game data folder's `logs` — `%APPDATA%\Surviving
+   Mars Relaunched` on Windows, `~/Library/Application Support/...` on macOS,
+   `~/.local/share/...` on Linux — for Lua errors and asserts, and confirm your
+   fix stays silent while `debug = false`.
 5. Temporarily set `debug = true`, confirm `Bug fix invoked:` fires exactly once
    per correction, then set it back to `false`.
 

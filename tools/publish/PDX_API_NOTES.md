@@ -14,10 +14,15 @@ Files here:
 ```text
 pdx_client.py      the client: Hawk signing, the upload sequence, per-step
                    reporting, retry of transient failures only
-capture.ps1        one command: capture the routes and finish the client
-capture_routes.py  the mitmproxy addon capture.ps1 drives
+capture.py         one command: capture the routes and finish the client
+capture_routes.py  the mitmproxy addon capture.py drives
 finish_routes.py   turns a capture into a filled-in ROUTES table
 ```
+
+**Only the capture needs the game.** `pdx_client.py` speaks HTTP and nothing
+else — it runs on a hosted Linux runner with no game, no SDK and no Paradox
+install. The game is needed exactly once, by one person, because it is the only
+program that already knows the routes. After that nobody needs it again.
 
 ## Where the upload happens
 
@@ -111,15 +116,16 @@ supplies every one of them at once.
 There is no certificate pinning in the DLL — the only TLS-adjacent string is an
 OpenSSL path from the bundled PGP library — so an intercepting proxy works.
 
-To capture, from an **elevated** PowerShell on the machine with the game:
+To capture, on the machine with the game — Windows, macOS or Linux:
 
-```powershell
-tools\publish\capture.ps1
+```
+python tools/publish/capture.py
 ```
 
-It installs mitmproxy, trusts its CA, points Windows at the proxy, and waits.
-Upload this mod once from the game's Mod Editor, press Ctrl+C, and it restores
-your proxy settings and fills in `ROUTES` for you. Confirm with a dry run:
+It installs mitmproxy, generates its CA, and prints the commands your platform
+needs to trust it and route traffic through it. On Windows the system proxy is
+also set and restored for you. Upload this mod once from the game's Mod Editor,
+press Ctrl+C, and it fills in `ROUTES`. Confirm with a dry run:
 
 ```
 python tools/publish/pdx_client.py --dry-run --payload dist/SMRCF.zip \
