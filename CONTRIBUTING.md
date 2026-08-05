@@ -247,11 +247,19 @@ Network errors, timeouts and 5xx retry four times with backoff before any of
 that. A 4xx never retries: it means the request itself was wrong, and repeating
 it only wastes the upload.
 
-If a run fails at `renew` with a 401, the refresh token has expired. Log in once
-in the game, read `refreshToken` from
-`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json`, and replace the
-secret with `gh secret set PDX_REFRESH`. The value is prompted for, so it never
-reaches your shell history.
+**You do not need a Paradox account to publish.** The workflow authenticates
+from the `PDX_REFRESH` secret, so anyone who can push a tag can release, and it
+does not matter whether the account that owns the mod page is logged in
+anywhere — that was tested with it logged out of the game.
+
+If a run does fail at `renew` with a 401, the token has been revoked or replaced
+and only whoever holds the publishing account can restore it: log in once in the
+game, read `refreshToken` from
+`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json`, and run
+`gh secret set PDX_REFRESH`. Two things to get right — read the token *while
+logged in*, since logging out erases the local copy, and make sure no trailing
+newline goes into the secret. A UUID is 36 characters, and the dry run prints
+the length it found.
 
 Anyone who can push can tag. A tag is the one irreversible action here — it
 reaches every subscriber's game.

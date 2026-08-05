@@ -93,8 +93,24 @@ pursue it — use a refresh token, which is what the client does.
 
 The refresh token is in
 `%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json` as `refreshToken`.
-It does **not** rotate on renewal, so it can be stored once as the `PDX_REFRESH`
-secret; it does change if you log out and back in.
+
+**It survives both renewal and logout**, which is what makes publishing from CI
+possible at all. Tested, not assumed:
+
+* Renewing does not rotate it — the renewal reply carries no new refresh token,
+  and the same value has been renewed repeatedly.
+* Logging out of the game **blanks `refreshToken` in `account.json` but does not
+  revoke it server-side**. The value kept renewing afterwards, and a CI dry run
+  authenticated and confirmed edit rights on the mod while the account was
+  logged out of the game.
+
+So the token is a standing credential, independent of anybody's session. Two
+consequences worth keeping in mind:
+
+* **Copy it out while logged in.** Logging out erases the local copy, and only a
+  fresh login mints another. Nothing warns you.
+* **Logging out is not a revocation.** If the token leaks, logging out does not
+  withdraw it; treat it as long-lived.
 
 ## Required headers
 
