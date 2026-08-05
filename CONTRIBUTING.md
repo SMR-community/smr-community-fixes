@@ -87,6 +87,31 @@ position, as all shipped fixes do.
 (master switch, version gate, player's checkbox); your file decides *what*
 happens when it does.
 
+## Game versions
+
+Fixes are separated by game version. Each one belongs to the version it was
+actually confirmed on — that is what `versions` declares — and the player picks
+a version at the top of the panel to see that version's list. A fix is never
+applied to a version nobody verified it against, because the next game patch may
+well have fixed the bug, and a repair running on top of that is a new bug.
+
+Omit `versions` and your fix is scoped to the current target version, which is
+right for anything confirmed today.
+
+When the game updates, the new version gets its own list:
+
+1. Add it to `Config.GAME_VERSIONS` in `Code/SMRCommunityFixes.lua` — the
+   catalog is data-driven, so nothing else in the UI changes.
+2. Re-confirm each fix against the new build, and add the version to the
+   `versions` table of every fix that still applies:
+
+   ```lua
+   versions = { ["1.0.7"] = true, ["1.0.8"] = true },
+   ```
+
+A fix Paradox has fixed upstream simply stops listing the new version. It keeps
+working for players still on the old one.
+
 ## What your fix must get right
 
 * **Idempotent both ways.** Enabling twice must not double-install. Disabling

@@ -6,7 +6,9 @@ Each fix repairs one confirmed vanilla bug and nothing else. Every fix is
 independent and individually toggleable, so you can run only the ones you want.
 Turn a fix off and the game behaves exactly as it does without this mod.
 
-Target game version: **v1.0.7**.
+Fixes are grouped by game version. Each fix belongs to the version it was
+confirmed on, and you pick the version at the top of the panel. Today that list
+is **v1.0.7**; when the game updates, the new version gets its own list.
 
 ## Using it
 

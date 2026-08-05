@@ -12,7 +12,8 @@ Mod id:                SMRCF (never change after release)
 Prefix for new files:  smrcf_
 Payload folder:        . (the repository root is the mod payload)
 Git remote:            https://github.com/SMR-community/smr-community-fixes.git
-Target game version:   Surviving Mars: Relaunched v1.0.7
+Target game version:   Surviving Mars: Relaunched v1.0.7 (current list; each
+                       later version gets its own, see section 4)
 Mod API revision:      350453 (the 'lua_revision' every mod declares; 392284 is
                        the game build, recorded separately as saved_with_revision)
 ```
@@ -152,14 +153,17 @@ the selected version.
    The panel shows the **SMR Community Fixes** title without the obsolete explanatory
    sentence below it. The title uses the same font family and size as **Search:**
    while retaining its original blue-gray color.
-3. The panel begins with a **Game version** dropdown. Version `1.0.7` contains
-   Restore Rains, Restore Disasters, and twelve default-off beta fixes. The
-   dropdown contains **All** and
-   **1.0.7**, defaults to `1.0.7` whenever the panel opens, and filters only the
-   displayed rows; **All** never changes the active runtime target. Later
-   verified versions can be added to the data-driven version list. The closed
-   field, popup, list items, and arrow use the same dark charcoal palette as the
-   panel; no dropdown state uses the stock white background.
+3. The panel begins with a **Game version** dropdown. Fixes are separated by
+   game version: each one appears only under the versions it was confirmed on,
+   declared in its `versions` table, so every game version has its own list and
+   no repair runs against a build nobody verified it against. Version `1.0.7`
+   contains Restore Rains, Restore Disasters, and twelve default-off beta fixes.
+   The dropdown contains **All** and **1.0.7**, defaults to `1.0.7` whenever the
+   panel opens, and filters only the displayed rows; **All** never changes the
+   active runtime target. Later verified versions are added to the data-driven
+   version list. The closed field, popup, list items, and arrow use the same dark
+   charcoal palette as the panel; no dropdown state uses the stock white
+   background.
 4. The filter changes the displayed rows immediately and is not persisted.
    Checkbox changes remain staged until **Apply**. Apply persists all checkbox
    changes atomically; Back and Escape discard unapplied checkbox changes.
