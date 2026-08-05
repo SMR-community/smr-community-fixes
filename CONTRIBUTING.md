@@ -26,6 +26,20 @@ and the game must behave exactly as it does without this mod.
    <https://github.com/SMR-community/smr-community-fixes>. Another community
    member reviews it.
 
+## Who can push
+
+This repository has no single owner. Everyone in the **SMR-community**
+organisation has push access to `main`, and `main` has no branch protection and
+no required review — nobody has to approve your work.
+
+Not a member yet? Ask for an invite at <smrcommunitymods@gmail.com> or open an
+issue. Members are added as equals, not as guests.
+
+Branch and pull request is still the **default** flow, because a second pair of
+eyes catches the things in *What a reviewer checks* below, and because the
+branch workflow registers your fix for you. Pushing straight to `main` is
+allowed when you are confident — registration then happens on `main` instead.
+
 ## Where files go
 
 ```text

@@ -72,16 +72,21 @@ Anyone can add a fix, and adding one is a Lua-only job — no build step and no
 tooling. Start from `templates/smrcf_restore_TEMPLATE.lua`; its header walks you
 through the whole process.
 
+The repository has no single owner: everyone in the **SMR-community**
+organisation can push to `main`, and there is no required review. Ask for an
+invite at <smrcommunitymods@gmail.com> or open an issue.
+
 **[CONTRIBUTING.md](CONTRIBUTING.md)** is the full guide: the one rule a fix must
 obey, the descriptor contract, what a reviewer checks, and how to test in game.
 **[DESCRIPTION.md](DESCRIPTION.md)** holds the complete requirements, the per-fix
 behaviour specifications, and the manual test steps.
 
-Two workflows run automatically. On a pull request, every Lua file is parsed and
-your fix is checked for a duplicate id, a taken number, leftover template
-placeholders, diagnostics left on, and references to framework internals. Once
-merged to `main`, your file is registered in `metadata.lua` and `items.lua` for
-you.
+Three workflows run automatically. Pushing a fix to any branch registers it in
+`metadata.lua` and `items.lua` on that branch and bumps the mod version, so pull
+the branch afterwards. On a pull request, every Lua file is parsed and your fix
+is checked for a duplicate id, a taken number, leftover template placeholders,
+diagnostics left on, and references to framework internals. After a merge, the
+same registration runs on `main` as a safety net.
 
 ## Reporting a bug in the game
 
