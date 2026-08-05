@@ -30,6 +30,16 @@
 -- At the bottom the template also wires set_enabled (REQUIRED), plus quiesce
 -- and events (OPTIONAL).
 --
+-- SWITCHING OFF MUST BE COMPLETE. set_enabled(false) has to put the game back
+-- exactly as your fix found it, with no restart. It is called when a player
+-- unchecks your fix, and again when the whole mod is switched off in the Mod
+-- Manager - the framework hears the game's ModUnloadLua and stands every fix
+-- down, so you need no code of your own for that, only a restore that works.
+-- Nothing your fix changes lives in this mod: it is all wrappers and fields
+-- inside the game's own globals and classes, and none of it disappears on its
+-- own. The one thing not to undo is a repair already written into the saved
+-- game - that is a state the game could have reached by itself.
+--
 -- Rename RestoreYourFix.Corrected below accordingly, e.g. RestoreSoilOverlay.Corrected.
 --
 -- To test in game, list your file in metadata.lua 'code' and in items.lua. You
@@ -188,6 +198,12 @@ function RestoreYourFix.InstallHook(reason)
 		Hooks.original = current_fn
 		Hooks.original_may_contain_wrapper = true
 	end
+	-- Plain assignment, never rawset(_G, ...). Inside a mod, _G is the mod's
+	-- own environment table: rawget reads fall through to the real globals, but
+	-- a rawset writes only into that table, where the game never sees it. An
+	-- assignment goes through ModEnvMeta.__newindex and reaches the real one.
+	-- The rawset calls elsewhere in this file are for this mod's own state keys,
+	-- which is the right place for them.
 	VanillaFunctionName = Hooks.wrapper
 	RestoreYourFix.enabled = true
 	Hooks.enabled = true
@@ -199,7 +215,8 @@ function RestoreYourFix.RestoreHook(reason)
 	RestoreYourFix.enabled = false
 	Hooks.enabled = false
 	-- Only unwrap while this module still owns the global, so a third-party
-	-- wrapper installed on top of ours is never destroyed.
+	-- wrapper installed on top of ours is never destroyed. Same rule as install:
+	-- assign, do not rawset.
 	if rawget(_G, "VanillaFunctionName") == Hooks.wrapper then
 		VanillaFunctionName = Hooks.original
 	end
@@ -220,7 +237,9 @@ function RestoreYourFix.ResetTransientState()
 	return true
 end
 
--- Called before a Lua reload replaces this descriptor.
+-- Called before a Lua reload replaces this descriptor, and again when the whole
+-- mod is switched off. The framework hears ModUnloadLua and calls every fix's
+-- quiesce, so you need no unload handler of your own - only a restore that works.
 function RestoreYourFix.Quiesce(reason)
 	return RestoreYourFix.SetEnabled(false, reason or "registry_reset")
 end
