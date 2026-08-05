@@ -31,7 +31,7 @@ local FIX = {
 	default_enabled = false,
 	debug = false,
 	label = "Restore Mod Screenshots",
-	description = "Declares the ScreenshotUrls field the Paradox Mods browser assigns but never defines, so opening a mod page no longer asserts.",
+	description = "Stops the error shown when opening a mod with screenshots in the Paradox Mods browser, so its screenshots load.",
 }
 
 local CLASS_NAME = "ModUI_Entry"
