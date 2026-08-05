@@ -111,8 +111,12 @@ decides it is ready.
 
 Anyone who can push can tag, and a tag is the one action here that reaches
 players. Before uploading, it re-runs the fix check and refuses the tag unless
-the mod version has moved since the last release. If an upload fails it says
-which step failed and opens an issue.
+the mod version has moved since the last release.
+
+Either way you find out what happened. A successful tag cuts a
+[release](../../releases) naming the published version and carrying the exact
+payload that was uploaded. A failed one opens an issue saying which step failed
+and what the server said — and closes it once a later tag succeeds.
 
 *Publishing to Paradox Mods* in [CONTRIBUTING.md](CONTRIBUTING.md) has the rest.
 

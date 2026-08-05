@@ -27,8 +27,8 @@ on:
         default: true
 
 permissions:
-  contents: read
-  issues: write   # a failed publish opens an issue; see the last step
+  contents: write  # a successful publish cuts a release
+  issues: write    # a failed one opens an issue
 
 concurrency:
   group: publish
@@ -151,6 +151,28 @@ jobs:
             gh issue create --title "Publishing $GITHUB_REF_NAME failed" \
               --label publish-failure --body "$body"
           fi
+
+      # Success needs to be as visible as failure, or the only signal anyone
+      # ever sees is the bad one. A release records what shipped, carries the
+      # exact payload, and shows on the repository front page.
+      - name: Announce a successful publish
+        if: success() && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n "s/.*'version', \([0-9]\{1,\}\),.*/\1/p" metadata.lua | head -n 1)
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          notes=$(printf '%s\n' \
+            "Published to Paradox Mods as **version $version**." "" \
+            "https://mods.paradoxplaza.com/authors/SMR-community" "" \
+            "\`SMRCF.zip\` below is the exact payload that was uploaded." \
+            "Tagged by @$GITHUB_ACTOR · [run]($run_url)")
+          gh release create "$GITHUB_REF_NAME" dist/SMRCF.zip \
+            --title "$GITHUB_REF_NAME — mod version $version" \
+            --notes "$notes" --generate-notes
+          echo "### Published version $version" >> "$GITHUB_STEP_SUMMARY"
+          echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" \
+            >> "$GITHUB_STEP_SUMMARY"
 
       # Otherwise a fixed publish leaves its failure issue open forever, and
       # nobody trusts the label after that.
