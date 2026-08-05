@@ -116,7 +116,9 @@ supplies every one of them at once.
 There is no certificate pinning in the DLL — the only TLS-adjacent string is an
 OpenSSL path from the bundled PGP library — so an intercepting proxy works.
 
-To capture, on the machine with the game — Windows, macOS or Linux:
+### Doing the capture
+
+On the machine with the game — Windows, macOS or Linux:
 
 ```
 python tools/publish/capture.py
@@ -142,6 +144,68 @@ The mod already exists as
 `finish_routes.py` will report `publish` as `NOT FOUND`, and that is expected —
 that route creates a *new* mod page, which this repository must never do again.
 Everything else must be filled.
+
+### Afterwards: delete the capture tooling
+
+Once `ROUTES` is filled and a sandbox publish has worked, **delete
+`capture.py`, `capture_routes.py`, `finish_routes.py` and `routes.json`**. They
+exist for one afternoon's work and are dead weight after it. This file is the
+record; the section below is enough to rebuild them if Paradox ever changes the
+API.
+
+### Rebuilding the capture by hand
+
+Everything the tooling did, in the order it did it:
+
+```
+pip install mitmproxy
+mitmdump --listen-port 8080            # once, to generate ~/.mitmproxy/
+```
+
+Trust the CA — `~/.mitmproxy/mitmproxy-ca-cert.pem`:
+
+```text
+Windows   certutil -addstore -f ROOT "%USERPROFILE%\.mitmproxy\mitmproxy-ca-cert.pem"
+macOS     sudo security add-trusted-cert -d -r trustRoot \
+              -k /Library/Keychains/System.keychain ~/.mitmproxy/mitmproxy-ca-cert.pem
+Linux     sudo cp ~/.mitmproxy/mitmproxy-ca-cert.pem \
+              /usr/local/share/ca-certificates/mitmproxy.crt && sudo update-ca-certificates
+```
+
+Route the game's traffic through it:
+
+```text
+Windows   Internet Settings → proxy 127.0.0.1:8080, or the ProxyEnable and
+          ProxyServer values under HKCU\Software\Microsoft\Windows\
+          CurrentVersion\Internet Settings
+macOS     sudo networksetup -setwebproxy Wi-Fi 127.0.0.1 8080
+          sudo networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 8080
+Linux     launch the game with HTTPS_PROXY=http://127.0.0.1:8080
+```
+
+Run `mitmdump` with an addon whose `response(flow)` hook records, for each
+request to `api.paradox-interactive.com`, the method, path, status, header
+*names*, and the *field names* of the request and response bodies — never the
+values, so credentials are not written down. Then upload the mod once from the
+Mod Editor.
+
+Match each captured request to a call by **method and body field names**, never
+by path, since the path is the unknown being recovered:
+
+```text
+login                POST, body has password
+renew                POST, body has refresh_token
+upload_content       POST, octet-stream, the largest body
+upload_asset         POST, octet-stream
+publish_new_version  POST, body has modId
+publish              POST, body has displayName
+setup_publish        POST, response has modName
+mod_details          GET
+```
+
+Replace the per-call parts of each path with the placeholders `pdx_client.py`
+substitutes: a run of 3+ digits becomes `{mod_id}`, a UUID becomes `{mod_name}`.
+Undo the proxy and CA changes afterwards.
 
 ## Risks, stated once
 
