@@ -200,8 +200,17 @@ The cover image does come from here — `Images\smr_community_fixes.jpg`, named 
 `publish.yml`. It is the only image published, and screenshots are left to the
 mod page.
 
-To rehearse, run the workflow from the **Actions** tab with **dry run** on: it
-packs the payload and checks the secret, and sends nothing.
+To rehearse, run the workflow from the **Actions** tab with **dry run** on. It
+packs the payload and sends nothing, and it answers the question a contributor
+cannot otherwise answer without a Paradox account of their own: it exchanges the
+stored token for a session, confirms that account may edit the mod, and confirms
+the version is above the published one. So a green dry run means a tag would go
+through, and a red one names the reason.
+
+The likeliest red is `REJECTED PDX_REFRESH was not accepted (HTTP 401)`, which
+means the token has been revoked or replaced and the secret needs setting again
+— see *What you get back* below. Nobody but whoever holds the publishing account
+can fix that, so it is worth checking before you tag rather than after.
 
 ### What you get back
 

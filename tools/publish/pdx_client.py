@@ -484,8 +484,54 @@ def publish_mod(args: argparse.Namespace) -> int:
     return 0
 
 
+def check_credential(args: argparse.Namespace) -> bool:
+    """Prove the stored token still works, without publishing anything.
+
+    Presence is not validity. The token is issued to one Paradox account, and
+    logging that account in again elsewhere can replace it - after which every
+    offline check still passes and only the tag fails. So the dry run spends two
+    reads to say plainly whether a publish would get through, which is what lets
+    somebody who has no Paradox account of their own confirm the repository is
+    ready before tagging.
+    """
+    session = PdxSession(HOSTS[args.env])
+    try:
+        session.establish_session(os.environ["PDX_REFRESH"])
+    except PdxError as exc:
+        status = f" (HTTP {exc.status})" if exc.status else ""
+        print(f"  REJECTED PDX_REFRESH was not accepted{status}: {exc}")
+        print("           The token has been revoked or replaced. Log in once as"
+              " the publishing account, read refreshToken from the SDK's"
+              " account.json, and re-run `gh secret set PDX_REFRESH`.")
+        return False
+
+    try:
+        live = session.mod_details(args.mod_id)
+    except PdxError as exc:
+        print(f"  FAILED  could not read mod {args.mod_id}: {exc}")
+        return False
+
+    ok = True
+    if live.get("actions", {}).get("canEdit"):
+        print(f"  ok      mod {args.mod_id} \"{live.get('displayName')}\" is "
+              f"editable by this account")
+    else:
+        print(f"  DENIED  this account cannot edit mod {args.mod_id}; publishing "
+              f"would be refused")
+        ok = False
+
+    published = live.get("latestVersion")
+    if isinstance(published, int) and args.version <= published:
+        print(f"  STALE   version {args.version} is not above the published "
+              f"{published}; bump 'version' in metadata.lua")
+        ok = False
+    else:
+        print(f"  ok      version {args.version} follows the published {published}")
+    return ok
+
+
 def preflight(args: argparse.Namespace) -> int:
-    """Check everything that does not touch the network, and report."""
+    """Report whether a publish would succeed, without publishing."""
     ok = True
 
     if args.mod_id:
@@ -520,6 +566,11 @@ def preflight(args: argparse.Namespace) -> int:
               "version without one")
         ok = False
 
+    # Last, and only if the rest holds: no point asking the service anything
+    # when the payload is already wrong.
+    if ok and os.environ.get("PDX_REFRESH") and not args.offline:
+        ok = check_credential(args)
+
     print("\ndry run complete: "
           + ("ready to publish" if ok else "not ready, see above"))
     return 0 if ok else 1
@@ -549,6 +600,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tag", action="append", default=[])
     parser.add_argument("--env", choices=sorted(HOSTS), default="prod")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--offline", action="store_true",
+                        help="with --dry-run, check only the files and arguments "
+                             "and never contact Paradox")
     parser.add_argument("--result-json", default="publish-result.json")
     args = parser.parse_args(argv)
 
