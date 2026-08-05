@@ -84,17 +84,26 @@ obey, the descriptor contract, what a reviewer checks, and how to test in game.
 **[DESCRIPTION.md](DESCRIPTION.md)** holds the complete requirements, the per-fix
 behaviour specifications, and the manual test steps.
 
-Four workflows run automatically. Pushing a fix to any branch registers it in
-`metadata.lua` and `items.lua` on that branch and bumps the mod version, so pull
-the branch afterwards. On a pull request, every Lua file is parsed and your fix
-is checked for a duplicate id, a taken number, leftover template placeholders,
-diagnostics left on, and references to framework internals. After a merge, the
-same registration runs on `main` as a safety net.
+Four things happen automatically:
 
-The fourth publishes. Merging never reaches players — pushing a version tag
-(`git tag v2 && git push origin v2`) packs the payload and uploads it to Paradox
-Mods, so a batch of merged fixes ships as one release when someone decides it is
-ready. See *Publishing to Paradox Mods* in [CONTRIBUTING.md](CONTRIBUTING.md).
+* **Push a fix to a branch** → it is registered in `metadata.lua` and
+  `items.lua` and the mod version is bumped, on that branch. Pull afterwards.
+* **Open a pull request** → every Lua file is parsed, and your fix is checked
+  for a duplicate id, a taken number, leftover template placeholders,
+  diagnostics left on, and references to framework internals.
+* **Merge it** → the same registration runs on `main`, as a safety net.
+* **Push a version tag** → the mod is packed and uploaded to Paradox Mods.
+
+Only that last step reaches players:
+
+```
+git tag v2
+git push origin v2
+```
+
+Merging never publishes on its own, so several fixes can land and then ship
+together as one release. *Publishing to Paradox Mods* in
+[CONTRIBUTING.md](CONTRIBUTING.md) has the detail.
 
 ## Reporting a bug in the game
 
