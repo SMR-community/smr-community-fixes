@@ -285,6 +285,48 @@ def publish_mod(args: argparse.Namespace) -> int:
     return 0
 
 
+def preflight(args: argparse.Namespace) -> int:
+    """Check everything that does not need a route, and report. Never sends."""
+    ok = True
+
+    for name in ("PDX_USER", "PDX_PASS"):
+        value = os.environ.get(name)
+        if value:
+            # Length only. The value itself is never printed.
+            print(f"  ok      {name} present ({len(value)} chars)")
+        else:
+            print(f"  MISSING {name}")
+            ok = False
+
+    for label, path, limit in (
+        ("payload", args.payload, None),
+        ("thumbnail", args.thumbnail, 2 * 1024 * 1024),
+        *[("screenshot", s, 2 * 1024 * 1024) for s in args.screenshot],
+    ):
+        if not path:
+            continue
+        if not os.path.exists(path):
+            print(f"  MISSING {label} {path}")
+            ok = False
+        elif limit and os.path.getsize(path) > limit:
+            print(f"  TOO BIG {label} {path} is {os.path.getsize(path)} bytes, limit {limit}")
+            ok = False
+        else:
+            print(f"  ok      {label} {path} ({os.path.getsize(path)} bytes)")
+
+    creds = Credentials(id="preflight", key="preflight")
+    header = hawk_header(creds, "POST", f"{HOSTS[args.env]}/", b"{}", "application/json")
+    print(f"  ok      hawk signing produces {header.split(',')[0]}, mac present={'mac=' in header}")
+
+    unknown = missing_routes()
+    print(f"  {'ok     ' if not unknown else 'PENDING'} routes: "
+          + ("all known" if not unknown else f"{len(unknown)} still unknown - " + ", ".join(unknown)))
+
+    print("\ndry run complete: " + ("ready to publish" if ok and not unknown
+                                    else "plumbing verified, capture the routes to go live"))
+    return 0 if ok else 1
+
+
 def _read_text(path: str | None) -> str:
     if not path:
         return ""
@@ -304,7 +346,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mod-id", type=int, help="omit for a first publication")
     parser.add_argument("--tag", action="append", default=[])
     parser.add_argument("--env", choices=sorted(HOSTS), default="prod")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="verify credentials, payload and signing without sending anything")
     args = parser.parse_args(argv)
+
+    if args.dry_run:
+        return preflight(args)
 
     unknown = missing_routes()
     if unknown:

@@ -21,6 +21,10 @@ on:
         type: choice
         options: [sandbox, prod]
         default: sandbox
+      dry_run:
+        description: Verify packing, secrets and signing without sending anything
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -61,7 +65,8 @@ jobs:
             --title "SMR Community Fixes" \
             --short-description "A community-maintained collection of bug fixes for Surviving Mars: Relaunched." \
             --version "$VERSION" \
-            --env "${{ inputs.env || 'prod' }}"
+            --env "${{ inputs.env || 'prod' }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
 
       - uses: actions/upload-artifact@v4
         if: always()
