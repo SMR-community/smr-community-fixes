@@ -192,17 +192,40 @@ publish them together when you choose.
 To rehearse, run the workflow from the **Actions** tab: it defaults to sandbox
 with **dry run** on, and sends nothing.
 
-**You are told either way.** A tag that publishes cuts a
-[release](../../releases) naming the version and attaching the exact payload
-uploaded. A tag that fails opens an issue saying which of the five upload steps
-broke, with the status code and the server's own message, and that issue closes
-itself once a later tag succeeds. Both also write a per-step table into the run
-summary.
+### What you get back
 
-Network errors, timeouts and 5xx retry automatically; a rejected password does
-not, because retrying one locks the account. If it fails *after* the payload
-uploaded but before it went live, it says so — nothing is public, and re-tagging
-replaces it.
+**You are told either way.** Both outcomes write a per-step table to the run
+summary:
+
+| Step | Result | Status | Time |
+|---|---|---|---|
+| `login` | ✅ | 200 | 180 ms |
+| `setup_publish` | ✅ | 200 | 16 ms |
+| `upload_asset` | ✅ | 200 | 804 ms |
+| `upload_content` | ❌ | 504 | 20019 ms |
+
+**If it published**, you get a [release](../../releases) for the tag: the mod
+version in the title, a link to the mod page, the commits since the last
+release, and `SMRCF.zip` — the exact payload uploaded — attached to it.
+
+**If it failed**, you get an issue titled `Publishing v2 failed`, saying which
+step broke, the HTTP status, the server's own message, who tagged and a link to
+the run. Tagging again comments on that same issue rather than opening another,
+and it closes itself once a tag succeeds.
+
+The exit code says what state things are in:
+
+| | |
+|---|---|
+| `0` | published |
+| `1` | failed; nothing was uploaded |
+| `2` | no credentials configured |
+| `3` | the API routes are not captured yet |
+| `5` | payload uploaded but never published — not live, re-tagging replaces it |
+
+Network errors, timeouts and 5xx retry four times with backoff before any of
+that. A rejected password does not retry, because repeating one locks the
+account.
 
 Anyone who can push can tag. A tag is the one irreversible action here — it
 reaches every subscriber's game.
