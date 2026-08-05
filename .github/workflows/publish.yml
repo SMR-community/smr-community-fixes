@@ -39,10 +39,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # tags and history, so the previous published version can be read
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Install Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      # Publishing is the one step players see and cannot be undone quietly.
+      # Refuse a tag whose payload would not even pass the ordinary fix check.
+      - name: Check the payload
+        run: lua5.4 tools/sync_mod.lua check
+
+      # A tag that ships the same 'version' as the last one would overwrite that
+      # release rather than add one, so require the integer to have moved.
+      - name: Check the version moved
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          read_version() { sed -n "s/.*'version', \([0-9]\{1,\}\),.*/\1/p" | head -n 1; }
+          version=$(read_version < metadata.lua)
+          previous_tag=$(git tag --list 'v*' --sort=-v:refname \
+            | grep -v "^${GITHUB_REF_NAME}$" | head -n 1)
+          if [ -z "$previous_tag" ]; then
+            echo "no earlier tag; this is the first publication at version $version"
+            exit 0
+          fi
+          previous=$(git show "$previous_tag:metadata.lua" | read_version)
+          echo "$previous_tag published version $previous; this tag has $version"
+          if [ "$version" -le "$previous" ]; then
+            echo "::error::version $version is not greater than $previous published at $previous_tag."
+            echo "::error::Land a fix (which bumps it automatically) or edit metadata.lua before tagging."
+            exit 1
+          fi
 
       # The payload is exactly what the game loads: no docs, no templates, no
       # tools, no workflows. Same rule as section 1 of DESCRIPTION.md.
@@ -50,7 +82,8 @@ jobs:
         run: |
           mkdir -p dist
           zip -r dist/SMRCF.zip metadata.lua items.lua Code Images -x '*.gitkeep'
-          echo "VERSION=$(grep -oP "'version', \K\d+" metadata.lua)" >> "$GITHUB_ENV"
+          version=$(sed -n "s/.*'version', \([0-9]\{1,\}\),.*/\1/p" metadata.lua | head -n 1)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
           ls -l dist/SMRCF.zip
 
       - name: Publish

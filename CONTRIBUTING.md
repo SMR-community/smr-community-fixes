@@ -142,6 +142,33 @@ PlaceObj('ModItemCode', {
 CI does this rather than the mod itself because the engine sandbox blocks `io`,
 `dofile` and folder listing, so no Lua in the mod can discover or register files.
 
+## Publishing to Paradox Mods
+
+The mod page is updated from GitHub, not from the game's Mod Editor. Merging
+does not publish. Pushing a version tag does:
+
+```
+git tag v2
+git push origin v2
+```
+
+[`publish.yml`](.github/workflows/publish.yml) then checks the payload, refuses
+the tag if `'version'` has not moved since the last one, packs `metadata.lua`,
+`items.lua`, `Code\` and `Images\`, and uploads that to Paradox Mods.
+
+The tag is only the trigger — the version players see is the integer in
+`metadata.lua`, which CI bumps for you. So several fixes can merge, and you
+publish them together when you choose.
+
+To rehearse, run the workflow from the **Actions** tab: it defaults to sandbox
+with **dry run** on, and sends nothing.
+
+Anyone who can push can tag. A tag is the one irreversible action here — it
+reaches every subscriber's game.
+
+> **Not live yet:** the upload needs one capture run first, described in
+> `tools/publish/PDX_API_NOTES.md`. Until then the publish step stops cleanly.
+
 ## Test before you submit
 
 1. Enable your fix, reproduce the bug, confirm it is gone.
