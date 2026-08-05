@@ -110,33 +110,58 @@ jobs:
             dist/SMRCF.zip
             publish-result.json
 
-      # The person who tagged may not be watching Actions, and with everyone
-      # able to tag it may not even be the person who wrote the fix. Put the
-      # failure somewhere the whole org sees, carrying the step and the server's
-      # own message.
-      - name: Open an issue if publishing failed
+      # A failed run emails whoever tagged and shows a red mark, but only they
+      # see it, and the log is gone in 90 days. An issue is visible to the whole
+      # org and outlives the run. One issue per tag, not one per attempt: a
+      # retagged failure comments on the existing one.
+      - name: Report a failed publish
         if: failure() && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          step=$(python -c "import json;print(json.load(open('publish-result.json'))['failed_step'])" 2>/dev/null || echo unknown)
-          status=$(python -c "import json;print(json.load(open('publish-result.json'))['status'] or '-')" 2>/dev/null || echo -)
-          message=$(python -c "import json;print(json.load(open('publish-result.json'))['message'])" 2>/dev/null || echo "see the run log")
-          gh issue create \
-            --title "Publishing $GITHUB_REF_NAME failed at $step" \
-            --label publish-failure \
-            --body "$(cat <<EOF
-          Publishing \`$GITHUB_REF_NAME\` to Paradox Mods failed.
+          field() { python -c "import json,sys;print(json.load(open('publish-result.json')).get(sys.argv[1]) or '-')" "$1" 2>/dev/null || echo '-'; }
+          step=$(field failed_step)
+          status=$(field status)
+          message=$(field message)
+          [ "$step" = "-" ] && step="before the upload started"
+          [ "$message" = "-" ] && message="see the run log"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
-          | | |
-          |---|---|
-          | Step | \`$step\` |
-          | HTTP status | $status |
-          | Message | $message |
-          | Run | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID |
-          | Tagged by | @$GITHUB_ACTOR |
+          # The label has to exist before it can be applied.
+          gh label create publish-failure --color B60205 \
+            --description "A tag failed to publish to Paradox Mods" 2>/dev/null || true
 
-          Nothing is live. Fix the cause, then re-tag with a higher \`'version'\`
-          in metadata.lua. The per-step table is in the run summary.
-          EOF
-          )"
+          body=$(printf '%s\n' \
+            "Publishing \`$GITHUB_REF_NAME\` to Paradox Mods failed." "" \
+            "| | |" "|---|---|" \
+            "| Failed at | \`$step\` |" \
+            "| HTTP status | $status |" \
+            "| Message | $message |" \
+            "| Run | $run_url |" \
+            "| Tagged by | @$GITHUB_ACTOR |" "" \
+            "Nothing is live. Fix the cause, then tag again with a higher \`'version'\` in metadata.lua." \
+            "The per-step table is in the run summary.")
+
+          existing=$(gh issue list --state open --label publish-failure \
+            --search "in:title $GITHUB_REF_NAME" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+            echo "commented on existing issue #$existing"
+          else
+            gh issue create --title "Publishing $GITHUB_REF_NAME failed" \
+              --label publish-failure --body "$body"
+          fi
+
+      # Otherwise a fixed publish leaves its failure issue open forever, and
+      # nobody trusts the label after that.
+      - name: Close the failure issue once it publishes
+        if: success() && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          open=$(gh issue list --state open --label publish-failure \
+            --search "in:title $GITHUB_REF_NAME" --json number --jq '.[].number')
+          for number in $open; do
+            gh issue close "$number" \
+              --comment "Published successfully on a later run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          done
