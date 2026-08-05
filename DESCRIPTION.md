@@ -74,8 +74,8 @@ lua tools/sync_mod.lua check    report problems (exit 1) and registration drift 
 lua tools/sync_mod.lua sync     append new fixes at the end of both lists, bump 'version'
 ```
 
-Three GitHub workflows drive it. `.github\workflows\` and `tools\` are not
-deployed:
+Three GitHub workflows drive it, and a fourth publishes (section 1C).
+`.github\workflows\` and `tools\` are not deployed:
 
 * `register-on-branch.yml` — on push to any branch but `main` touching `Code\`.
   Runs `sync` and commits the registration back to that branch, so a pull request
@@ -95,9 +95,39 @@ deployed:
 Both registering workflows commit with `[skip ci]` and skip the
 `github-actions[bot]` actor, so neither retriggers itself.
 
-The mod itself is unaffected by either: no runtime code, asset, or behavior depends
-on them, and the version bump they make is the same integer a maintainer would edit
-by hand.
+The mod itself is unaffected by any of them: no runtime code, asset, or behavior
+depends on them, and the version bump they make is the same integer a maintainer
+would edit by hand.
+
+## 1C. Publishing
+
+Players get the mod from Paradox Mods, and that page is updated from GitHub, not
+from the game's Mod Editor. `PDX_Upload` in the game is a driver over native
+functions in `PDXSDK.dll`, so nothing can be reused from Lua and no hosted runner
+can run it; `tools\publish\pdx_client.py` therefore talks to the service
+directly, signing each request with Hawk and authenticating with the `PDX_USER`
+and `PDX_PASS` repository secrets.
+
+Merging never publishes. Pushing a `v*` tag runs `publish.yml`, which:
+
+1. runs the same `sync_mod.lua check` as a pull request;
+2. refuses the tag unless `'version'` exceeds the previously tagged release,
+   which would otherwise overwrite it rather than add one;
+3. packs `metadata.lua`, `items.lua`, `Code\` and `Images\` — the deployment set
+   from section 1, and nothing else;
+4. uploads it, reporting each of the five calls with status, elapsed time and
+   attempts.
+
+Timeouts, connection errors, `429` and `5xx` retry with backoff; `4xx` never
+does, because retrying a rejected password locks the account. A failed tag opens
+an issue naming the step, the status and the server's message. Exit codes
+distinguish a fatal error, missing credentials, unknown routes, and a failure
+after the payload uploaded but before it went live.
+
+The API is undocumented, so the request routes come from one capture run against
+the real service; `tools\publish\PDX_API_NOTES.md` records what is known and
+reduces the capture to a single command. Until those routes are filled the
+publish step stops cleanly and sends nothing.
 
 ## 2. Task type
 

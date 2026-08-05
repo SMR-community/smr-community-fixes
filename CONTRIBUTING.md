@@ -163,6 +163,13 @@ publish them together when you choose.
 To rehearse, run the workflow from the **Actions** tab: it defaults to sandbox
 with **dry run** on, and sends nothing.
 
+**If it fails**, you get told which of the five upload steps broke, with the
+status code and the server's own message, as a table in the run summary. Network
+errors, timeouts and 5xx retry automatically; a rejected password does not,
+because retrying one locks the account. A failed tag also opens an issue, so
+nobody has to be watching Actions. If it fails *after* the payload uploaded but
+before it went live, it says so — nothing is public, and re-tagging replaces it.
+
 Anyone who can push can tag. A tag is the one irreversible action here — it
 reaches every subscriber's game.
 

@@ -9,6 +9,16 @@ not, and cannot be recovered from strings — see *What is still missing*. The
 client in `pdx_client.py` is complete except for those routes, and refuses to
 run until they are supplied.
 
+Files here:
+
+```text
+pdx_client.py      the client: Hawk signing, the upload sequence, per-step
+                   reporting, retry of transient failures only
+capture.ps1        one command: capture the routes and finish the client
+capture_routes.py  the mitmproxy addon capture.ps1 drives
+finish_routes.py   turns a capture into a filled-in ROUTES table
+```
+
 ## Where the upload happens
 
 Not in Lua. `PDX_Upload` in `ModTools\Src\CommonLua\Libs\Paradox\ParadoxMods.lua`
@@ -101,21 +111,27 @@ supplies every one of them at once.
 There is no certificate pinning in the DLL — the only TLS-adjacent string is an
 OpenSSL path from the bundled PGP library — so an intercepting proxy works.
 
-To capture, on the machine with the game:
+To capture, from an **elevated** PowerShell on the machine with the game:
+
+```powershell
+tools\publish\capture.ps1
+```
+
+It installs mitmproxy, trusts its CA, points Windows at the proxy, and waits.
+Upload this mod once from the game's Mod Editor, press Ctrl+C, and it restores
+your proxy settings and fills in `ROUTES` for you. Confirm with a dry run:
 
 ```
-pip install mitmproxy
-mitmdump -s tools/publish/capture_routes.py --set confdir=~/.mitmproxy
+python tools/publish/pdx_client.py --dry-run --payload dist/SMRCF.zip \
+    --thumbnail Images/smr_community_fixes.jpg --version 1
 ```
 
-Trust `~/.mitmproxy/mitmproxy-ca-cert.cer` in the Windows machine store, point
-the system proxy at `127.0.0.1:8080`, then upload this mod once from the game's
-Mod Editor. `capture_routes.py` writes every `api.paradox-interactive.com`
-request to `tools/publish/routes.json` with method, path, headers and body
-shape, redacting credentials as it goes.
+Only shape is recorded — method, path, header names and body field names. Values,
+including your password, are redacted before anything reaches disk.
 
-Fill the `ROUTES` table in `pdx_client.py` from that file and the client is
-complete.
+A first publication and an update of an existing mod use different calls
+(`publish` versus `publish_new_version`), so capture both to fill every route.
+`finish_routes.py` names any it did not see.
 
 ## Risks, stated once
 
