@@ -10,7 +10,7 @@ Fixes are grouped by game version. Each fix belongs to the version it was
 confirmed on, and you pick the version at the top of the panel. Today that list
 is **v1.0.7**; when the game updates, the new version gets its own list.
 
-<img width="1448" height="1086" alt="smr_community_fixes" src="https://github.com/user-attachments/assets/647f674a-8cf0-4dc7-9625-82ca13e7c73f" />
+<img width="1920" height="1067" alt="screenshot_01" src="https://github.com/user-attachments/assets/c7664c82-5c35-4906-8df5-8b215a2437f0" />
 
 ## Using it
 
