@@ -99,6 +99,11 @@ The game only loads files listed in `metadata.lua` `'code'` and `items.lua`.
 * **After merge** — `register-fixes.yml` runs the same registration on `main`,
   covering anything the branch run missed. It never reorders existing entries.
 
+Every fix appends to the end of the same two lists, so if another fix merges
+while yours is open, your pull request will conflict on `metadata.lua` and
+`items.lua`. Resolve it the lazy way: rebase on `main`, keep **main's** copy of
+both files, and push. The branch workflow re-runs and appends your fix again.
+
 Working from a **fork**? GitHub disables workflows on a new fork until you
 enable them once on your fork's **Actions** tab. Until you do, no branch
 registration runs — the after-merge workflow still catches it, but your fix
