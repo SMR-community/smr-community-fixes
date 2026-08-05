@@ -86,8 +86,26 @@ happens when it does.
 
 ## Registration is automatic
 
-The game only loads files listed in `metadata.lua` `'code'` and `items.lua`, so
-add both entries locally to test:
+The game only loads files listed in `metadata.lua` `'code'` and `items.lua`.
+**You never write those entries.** Push your branch and CI adds them for you:
+
+* **When you push your branch** — `register-on-branch.yml` appends both entries,
+  bumps the version, and commits that to your branch. **`git pull` before you
+  commit again**, or your next push is rejected as out of date.
+* **On your PR** — `check-fixes.yml` parses every Lua file and fails only on
+  things a person must fix: duplicate id, taken number, leftover template
+  placeholder, `debug = true`, a reference to framework internals, or a missing
+  `description`/`set_enabled`.
+* **After merge** — `register-fixes.yml` runs the same registration on `main`,
+  covering anything the branch run missed. It never reorders existing entries.
+
+Working from a **fork**? GitHub disables workflows on a new fork until you
+enable them once on your fork's **Actions** tab. Until you do, no branch
+registration runs — the after-merge workflow still catches it, but your fix
+won't load in game from your own checkout until the entries exist.
+
+To add them yourself instead — needed if you want to test **before** pushing —
+either run `lua tools/sync_mod.lua sync` (any Lua 5.4), or add these by hand:
 
 ```lua
 -- metadata.lua, anywhere in the 'code' list
@@ -102,19 +120,7 @@ PlaceObj('ModItemCode', {
 }),
 ```
 
-**You can leave both out of your pull request.** Two workflows handle it:
-
-* **On your PR** — `check-fixes.yml` parses every Lua file and fails only on
-  things a person must fix: duplicate id, taken number, leftover template
-  placeholder, `debug = true`, a reference to framework internals, or a missing
-  `description`/`set_enabled`. Not-yet-registered is a notice, not a failure.
-* **After merge** — `register-fixes.yml` appends the two entries, bumps the
-  version and commits that itself. It never reorders existing entries.
-
-With Lua installed you can run the same thing locally:
-`lua tools/sync_mod.lua check` and `lua tools/sync_mod.lua sync`.
-
-This is CI's job rather than the mod's because the engine sandbox blocks `io`,
+CI does this rather than the mod itself because the engine sandbox blocks `io`,
 `dofile` and folder listing, so no Lua in the mod can discover or register files.
 
 ## Test before you submit

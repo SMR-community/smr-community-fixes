@@ -1,0 +1,72 @@
+name: Register on branch
+
+# Runs when a fix is pushed to any branch other than main. It adds the file to
+# the metadata.lua 'code' list and to items.lua, bumps the integer 'version',
+# and commits that back to the same branch - so the pull request already carries
+# its own registration and the contributor never writes those entries by hand.
+#
+# register-fixes.yml does the same thing after a merge. It stays as the safety
+# net for the cases this workflow cannot cover: a fork with Actions disabled, or
+# a fix committed straight to main.
+#
+# On a fork, this runs in the fork with the fork's own token, so it commits to
+# the contributor's branch. GitHub disables workflows on new forks until the
+# owner enables them on the Actions tab.
+#
+# Order differs from register-fixes.yml on purpose: there, `check` runs first so
+# a broken fix is never registered on main. Here registration happens first and
+# `check` reports afterwards, because on a work-in-progress branch the useful
+# outcome is a registered branch plus a clear list of what still needs fixing.
+#
+# Two guards stop it triggering itself: the actor check below, and [skip ci] in
+# the commit message it writes.
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - 'Code/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: register-branch-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  register:
+    name: Register the pushed fix on its branch
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # a real token history so the pushed commit lands on the branch
+          persist-credentials: true
+
+      - name: Install Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      - name: Register and bump
+        run: lua5.4 tools/sync_mod.lua sync
+
+      - name: Commit if anything changed
+        run: |
+          if git diff --quiet -- metadata.lua items.lua; then
+            echo "Nothing to register; metadata.lua and items.lua already match Code/."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add metadata.lua items.lua
+          git commit -m 'Register new bug fixes and bump the mod version [skip ci]'
+          # Another push may have landed while this ran; rebase onto it and retry.
+          git push || (git pull --rebase && git push)
+          echo "### Registered on \`${GITHUB_REF_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pull this branch before you commit again." >> "$GITHUB_STEP_SUMMARY"
+          git show --stat --oneline HEAD >> "$GITHUB_STEP_SUMMARY"
+
+      # Last, so the branch is registered even while the fix still needs work.
+      - name: Check the fix
+        run: lua5.4 tools/sync_mod.lua check
