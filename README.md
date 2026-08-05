@@ -136,8 +136,6 @@ Saves live in the game's data folder, under `saves`:
 
 ```text
 Windows   %APPDATA%\Surviving Mars Relaunched
-macOS     ~/Library/Application Support/Surviving Mars Relaunched
-Linux     ~/.local/share/Surviving Mars Relaunched
 ```
 
 Most are **too big to attach** — GitHub caps attachments at 25 MB, and a `.sav`
