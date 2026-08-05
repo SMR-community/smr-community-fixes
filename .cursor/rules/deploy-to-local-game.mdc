@@ -1,0 +1,41 @@
+---
+description: Commit changes and deploy them to the local game Mods folder
+alwaysApply: true
+---
+
+# After changing the mod: commit, then deploy
+
+Both steps, every time, unless told otherwise.
+
+1. Commit and push to `origin/main`.
+2. Copy the deployment set into the local game so the change can be tested.
+
+The deployment set is exactly what the game loads, and matches what
+`publish.yml` packs: `metadata.lua`, `items.lua`, `Code/`, `Images/`. Never copy
+docs, `templates/`, `tools/` or `.github/`.
+
+```powershell
+$src  = "D:\PROJS\SMR\smr-community-fixes"
+$dest = "$env:APPDATA\Surviving Mars Relaunched\Mods\smr-community-fixes"
+robocopy "$src\Code"   "$dest\Code"   /MIR /NFL /NDL /NJH /NJS /NP
+robocopy "$src\Images" "$dest\Images" /MIR /NFL /NDL /NJH /NJS /NP
+Copy-Item "$src\metadata.lua","$src\items.lua" -Destination $dest -Force
+$global:LASTEXITCODE = 0   # robocopy returns 1 on success
+```
+
+`/MIR` deletes anything in the destination that is not in the source, so keep it
+pointed at those two subfolders and never at the Mods root.
+
+## Never touch another mod
+
+`%APPDATA%\Surviving Mars Relaunched\Mods\` holds many unrelated mods. Only
+`smr-community-fixes` may be written to. Read another mod's files when
+diagnosing something — a callstack often points into one — but never modify,
+move, disable or delete them.
+
+## Reading game output
+
+Logs are in `%APPDATA%\Surviving Mars Relaunched\logs`, newest last. The build
+is `MarsDebug.exe`, so engine asserts appear with a Lua callstack naming the mod
+and file responsible — check which mod it actually names before assuming it is
+this one.
