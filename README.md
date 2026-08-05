@@ -105,9 +105,16 @@ issue describing how to reproduce it and which version you saw it on.
 **Attach a savegame if you can.** Finding a cause means reproducing the bug, and
 a save that already shows it turns hours of guesswork into minutes.
 
-GitHub rejects `.sav` files, so **put the save in a .zip** and drag that onto the
-issue — zip is accepted, up to 25 MB. If it is larger, link it from anywhere you
-like instead. Saves are in `%APPDATA%\Surviving Mars Relaunched\saves`.
+Saves are in `%APPDATA%\Surviving Mars Relaunched\saves`. Most are **too big to
+attach** — GitHub caps attachments at 25 MB, and a `.sav` is already compressed,
+so zipping it barely helps. So:
+
+* **Upload it anywhere and paste the link** — Drive, Dropbox, MEGA, whatever you
+  already use. This is the normal way; nobody minds.
+* **Under 25 MB?** Put it in a `.zip` and drag it onto the issue. GitHub refuses
+  a bare `.sav`, but accepts a zip.
+* **No file host?** Split the zip into parts below 25 MB, rename each part to end
+  in `.zip`, and attach them all. Ugly, but it needs no account anywhere.
 
 Also useful, in order: the newest log from
 `%APPDATA%\Surviving Mars Relaunched\logs`, the list of other mods you had
