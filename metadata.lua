@@ -6,6 +6,7 @@ return PlaceObj('ModDef', {
 	'last_changes', "First community release.",
 	'id', "SMRCF",
 	'author', "SMR-community",
+	'pdx_id', 154004,
 	'version', 2,
 	'lua_revision', 350453,
 	'code', {
