@@ -161,10 +161,6 @@ and its certificate afterwards matters for the same reason.
 * The API is undocumented and unsupported. Any change on Paradox's side breaks
   publishing with no warning, and their terms are worth reading before relying
   on it.
-* `PDX_REFRESH` can be read by any organisation member, because anyone able to
-  push a workflow can print a secret and every member can push to `main`.
-  Logging out does not withdraw it, so the publishing account should be a
-  dedicated one that owns nothing else.
 * The token can stop working. A publish that fails at `renew` with a 401 needs a
   fresh `refreshToken` and a new `gh secret set PDX_REFRESH`. A dry run reports
   this before a tag does.
