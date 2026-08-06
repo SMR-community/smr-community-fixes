@@ -50,11 +50,11 @@ default. The two stable fixes ship **on**.
 | 012 | Restore Localized UI Text | Beta | Uses the game's existing official translations for the terraforming heading and the Universal Rocket's Back to Earth action. |
 | 013 | Restore Track Demolition | Beta | Completes terminal track-element demolition and removes invalid Track remnants already stored in existing savegames. |
 | 014 | Restore Clustered Lights | Beta | Stops night lights entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion. |
-| 015 | Restore Mod Screenshots | Beta | Shows a mod's screenshots in the Paradox Mods browser, where two separate faults previously produced errors and no pictures. |
-| 016 | Restore Mod Details | Beta | Shows current thumbnails and selectable detail-page screenshots with already-formatted 20-point HTML/Steam descriptions, including Unicode, emoji, visible bold, lists, and links. |
+| 016 | Restore Mod Details | Beta | Shows the Paradox Mods screenshots vanilla never displays, alongside current thumbnails and already-formatted 20-point HTML/Steam descriptions, including Unicode, emoji, visible bold, lists, and links. |
 
 Numbers are permanent and never reused, so a fix keeps its number even if
-another is removed.
+another is removed. That is why 015 is missing: Restore Mod Screenshots repaired
+the same detail path as 016 and was merged into it, and its number is retired.
 
 ## How it is built
 

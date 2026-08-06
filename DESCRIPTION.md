@@ -164,7 +164,7 @@ the selected version.
    game version: each one appears only under the versions it was confirmed on,
    declared in its `versions` table, so every game version has its own list and
    no repair runs against a build nobody verified it against. Version `1.0.7`
-   contains Restore Rains, Restore Disasters, and fourteen default-off beta fixes.
+   contains Restore Rains, Restore Disasters, and thirteen default-off beta fixes.
    The dropdown contains **All** and **1.0.7**, defaults to `1.0.7` whenever the
    panel opens, and filters only the displayed rows; **All** never changes the
    active runtime target. Later verified versions are added to the data-driven
@@ -486,48 +486,43 @@ When enabled, Restore Clustered Lights must:
 5. Default disabled and emit a timed `Bug fix invoked:` event only when a
    positive vanilla delay is replaced with the atomic turn-on call.
 
-## 5N. [Beta] Restore Mod Screenshots behavior
+## 5N. [Beta] Restore Mod Details behavior
 
-`ModUI_Entry` derives from `ProtectedPropertyObject`, whose `__newindex` asserts
-on any key the class never declared (`CommonLua\PropertyObject.lua:1819-1823`).
-The class declares `ScreenshotPaths` (`CommonLua\UI\ModManager.lua:1229`) but
-never `ScreenshotUrls`, which line 797 assigns and
-`CommonLua\Libs\Paradox\ParadoxMods.lua:249` reads back. Opening a mod page in
-the Paradox Mods browser therefore asserts, and where asserts halt, the
-`ModsUIDownloadScreenshots` call on line 799 is never reached.
-
-When enabled, Restore Mod Screenshots must:
-
-1. Declare `ScreenshotUrls` on the confirmed v1.0.7 `ModUI_Entry` class as
-   `false`, matching how the neighbouring `ScreenshotPaths` is declared, without
-   wrapping any function or modifying the game installation.
-2. Do nothing when the field is already declared, so a later official
-   declaration is never disturbed.
-3. Remove only a declaration this fix added, and only while it still holds the
-   value this fix wrote, so disabling restores vanilla exactly.
-4. Remain idempotent across enable/disable and code reload, retrying on
-   `GameStateStarting` in case the class did not exist when first enabled, and
-   keep no saved object, timer, or marker.
-5. Default disabled and emit a timed `Bug fix invoked:` event once per enable,
-   only when it actually adds the missing declaration.
-
-## 5O. [Beta] Restore Mod Details behavior
+Number 015, Restore Mod Screenshots, was merged into this fix in mod version 13.
+Both repaired the same detail path, and either one alone left the other's
+symptom visible; 015's number is retired and never reused.
 
 The v1.0.7 detail-page retrieval passes a mod description through the limited
 `HTMLParser` (`CommonLua\UI\ModManager.lua:740-743`). That parser deliberately
 turns anchors into inert `label [URL]` text and discards the contents of HTML
 tags it does not recognize (`CommonLua\X\HTMLParser.lua:67-143`), even though
-`ModsUIModDetails` already handles `OpenUrl` hyperlinks. Image downloads also
-reuse a cache name made only from ModID and PreferredVersion
-(`CommonLua\Libs\Paradox\ParadoxMods.lua:218-276`), so replacing an image
-without publishing a new mod version leaves the old thumbnail in Browse All,
-Installed Mods, and the detail page. The same function calls an unavailable
-screenshot downloader, and the detail template creates its selector only when
-screenshot paths already exist at spawn time.
+`ModsUIModDetails` already handles `OpenUrl` hyperlinks.
+
+`ModUI_Entry` derives from `ProtectedPropertyObject`, whose `__newindex` asserts
+on any key the class never declared (`CommonLua\PropertyObject.lua:1819-1823`).
+The class declares `ScreenshotPaths` (`CommonLua\UI\ModManager.lua:1229`) but
+never `ScreenshotUrls`, which line 797 assigns and
+`CommonLua\Libs\Paradox\ParadoxMods.lua:249` reads back. A mod that has
+screenshots therefore asserts on that assignment, and where asserts halt, the
+`ModsUIDownloadScreenshots` call on line 799 is never reached.
+
+Image downloads also reuse a cache name made only from ModID and
+PreferredVersion (`CommonLua\Libs\Paradox\ParadoxMods.lua:218-276`), so
+replacing an image without publishing a new mod version leaves the old thumbnail
+in Browse All, Installed Mods, and the detail page. The same function calls an
+unavailable screenshot downloader, and the detail template creates its selector
+only when screenshot paths already exist at spawn time.
 
 When enabled, Restore Mod Details must:
 
-1. Remain one fix for both symptoms: call the captured
+1. Declare `ScreenshotUrls` on the confirmed v1.0.7 `ModUI_Entry` class as
+   `false`, matching how the neighbouring `ScreenshotPaths` is declared, and do
+   nothing when the field is already declared, so a later official declaration
+   is never disturbed. Removal must take back only a declaration this fix added,
+   and only while it still holds the value this fix wrote. It must emit a timed
+   `Bug fix invoked:` event once per enable, only when it actually adds the
+   missing declaration.
+2. Remain one fix for every symptom on this path: call the captured
    `ModsUIRetrieveModDetails` first, then post-process only the selected mod
    after vanilla's detail-retrieval thread finishes. Defer its raw refresh until
    formatting completes. It must also wrap the captured
@@ -538,18 +533,20 @@ When enabled, Restore Mod Details must:
    It must also prepare current screenshots before `ModsUISetDialogMode` opens
    details, allowing the existing selector below the main image to spawn and
    retain its vanilla click-to-select behavior.
-2. Detect HTML or Steam BBCode descriptions and parse them with private parser
+3. Detect HTML or Steam BBCode descriptions and parse them with private parser
    instances. Retain headings, bold/italic/underline text, lists, quotes, code,
    separators, and safe HTTP/HTTPS links; decode numeric Unicode entities; wrap
    output in the engine's fallback-font mode; and render the entire description
    at 20 points with a fix-owned visibly bold Noto style. It must not change the
    global `HTMLParser` or `SteamParser` classes.
-3. Download the current full response's `DisplayImagePath` for detail and list
+4. Download the current full response's `DisplayImagePath` for detail and list
    entries plus every valid `Screenshots[].Image` in API order, using
    cache-revalidation headers and unique fix-owned files without deleting or
    overwriting the vanilla cache. Populate `ScreenshotPaths` atomically before
    the first detail render, then refresh with `ModUI_Entry:ObjModified()`.
-4. Keep reload-safe ownership records for every `LongDescription`, `Thumbnail`,
+   Vanilla's unfinished screenshot branch is never repaired or run: its URL list
+   is withheld for the duration of the captured call only.
+5. Keep reload-safe ownership records for every `LongDescription`, `Thumbnail`,
    `ScreenshotUrls`, `ScreenshotPaths`, worker, file, text style, class field,
    and fallback-font list it changes. Disabling or
    quiescing must first close the gate and cancel its workers, restore a field
@@ -558,9 +555,11 @@ When enabled, Restore Mod Details must:
    fix-owned files, and restore each exact captured function only while the fix
    still owns its global.
    A later third-party field value, text style, or wrapper must be preserved.
-5. Remain idempotent across repeated enable/disable and Lua reload, keep no saved
-   object or marker, default disabled, and emit one timed `Bug fix invoked:`
-   event for each browser entry refresh that it actually changes.
+6. Remain idempotent across repeated enable/disable and Lua reload, retrying on
+   `GameStateStarting` in case the class or a required function did not exist
+   when first enabled, keep no saved object or marker, default disabled, and
+   emit one timed `Bug fix invoked:` event for each browser entry refresh that
+   it actually changes.
 
 ## 6. Configuration and persistence
 
@@ -585,7 +584,7 @@ version constant.
 
 Each fix owns its own default and its own diagnostic flag inside its descriptor:
 `default_enabled` (true for Restore Rains and Restore Disasters, false for the
-fourteen betas) and `debug = false` for the publish build. A fix's inline logger
+thirteen betas) and `debug = false` for the publish build. A fix's inline logger
 emits Info only while its own `debug` is true; `ERROR` is never gated. Setting
 `Config.DEBUG_LOGS = true` also turns on every fix's `debug` when the framework
 adopts the registry, which produces a full diagnostic build in one edit.
@@ -638,7 +637,7 @@ Restore Disasters description: Removes stale completed-meteor-storm state that c
 [Beta] Restore Clustered Lights title: Restore Clustered Lights
 [Beta] Restore Clustered Lights description: Prevents v1.0.7 night lights from entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion.
 [Beta] Restore Mod Details title: Restore Mod Details
-[Beta] Restore Mod Details description: Loads current thumbnails and selectable detail-page screenshots throughout the Paradox Mods browser and restores website-style description formatting with clickable links.
+[Beta] Restore Mod Details description: Shows the mod screenshots v1.0.7 never displays, loads current thumbnails throughout the Paradox Mods browser, and restores website-style description formatting with clickable links.
 Select group button: Select group
 Unselect group button: Unselect group
 Apply button: Apply
@@ -695,8 +694,8 @@ the engine's item-selection translation assertion.
       open, filters the current version's rows case-insensitively against their
       visible labels and descriptions, and updates the shown count. Clear restores
       all rows for the current version.
-- [ ] All sixteen permanent numbers appear in the left column for `1.0.7`; the
-      last fourteen are followed by a separate **[Beta]** badge. All right-column
+- [ ] All fifteen permanent numbers appear in the left column for `1.0.7`; the
+      last thirteen are followed by a separate **[Beta]** badge. All right-column
       titles are unnumbered.
 - [ ] Changing the version filter rebuilds the visible rows immediately, **All**
       does not change the active `1.0.7` runtime target, and reopening the panel
@@ -821,7 +820,9 @@ the engine's item-selection translation assertion.
       calls to delay zero, leaves instant refreshes and `NightLightsOff()`
       unchanged, restores the exact captured function when disabled, and emits
       one timed correction event for each altered delayed transition.
-- [ ] Restore Mod Details refreshes thumbnails in Browse All, Installed Mods,
+- [ ] Restore Mod Details declares the missing `ModUI_Entry.ScreenshotUrls`
+      field so a mod that has screenshots no longer asserts on the assignment;
+      refreshes thumbnails in Browse All, Installed Mods,
       and the selected mod from current full-detail responses before their first
       populated render without flashing the stale cache; withholds raw detail
       text until HTML or Steam BBCode has been formatted at 20 points with
@@ -860,7 +861,7 @@ the engine's item-selection translation assertion.
    Confirm the **SMR Community Fixes** display title is slightly larger than **Search:**
    while retaining its earlier blue-gray color.
 4. If persistent storage previously selected `unsupported`, reopen the checklist
-   and confirm it now normalizes to `1.0.7` with all sixteen fix rows available.
+   and confirm it now normalizes to `1.0.7` with all fifteen fix rows available.
 5. Select **All** and confirm all catalog rows are shown without changing the
    active runtime target. Close and reopen the panel and confirm the filter
    defaults back to `1.0.7`.
@@ -868,7 +869,7 @@ the engine's item-selection translation assertion.
    confirm it is still enabled. Repeat using Escape.
 7. Toggle Restore Rains off, press Apply, and confirm the panel stays open and
    shows it disabled. Close and reopen the panel and confirm it persisted.
-8. Stage changes to all sixteen fixes, press Apply, and confirm they commit together.
+8. Stage changes to all fifteen fixes, press Apply, and confirm they commit together.
    Confirm the first two left columns show checkbox + **001** and checkbox +
    **002**, while their right-column titles are **Restore Disasters** and
    **Restore Rains** under both filters. Confirm each beta row shows checkbox +
@@ -880,9 +881,9 @@ the engine's item-selection translation assertion.
    returns to `1.0.7`, and every checkbox is cleared, the two stable fixes
    included; the summary then reads `0 selected`. Confirm the footer order is Select group, Unselect
    group, Apply, Reset, Back; all labels are centered; the toolbar summary reads
-   `16 shown / 16 total / <n> selected` and updates with staged checkbox changes;
+   `15 shown / 15 total / <n> selected` and updates with staged checkbox changes;
    and no numeric fix count appears below the list.
-9. Open the checklist and confirm all sixteen rows render: checkbox, number,
+9. Open the checklist and confirm all fifteen rows render: checkbox, number,
    `[Beta]` badge on 003-016, then the plain-text title above its explanation. No
    `Translate` assertion or missing-text row may appear, and no forecast box or
    diagnostic overlay may appear anywhere during play.
@@ -927,18 +928,18 @@ the engine's item-selection translation assertion.
     assertion occurred with Restore Clustered Lights enabled and disabled.
 24. On a disposable mod copy, remove `Code/smrcf_restore_rains.lua` and its matching
     `metadata.lua` and `items.lua` entries, reload the mod, and confirm the panel
-    contains the fifteen remaining fixes, **001** remains beside Restore Disasters'
+    contains the fourteen remaining fixes, **001** remains beside Restore Disasters'
     checkbox, and no load error occurs.
 25. Reopen the checklist and confirm Search is blank and Game version visibly
     reads `1.0.7`. Search for text unique to Restore Rains and Restore Disasters;
     confirm the visible rows and shown count update case-insensitively. Press
-    Clear and confirm all sixteen rows return. Confirm the slim right scrollbar
-    appears for the sixteen-row catalog, mouse-wheel and thumb scrolling reach the
+    Clear and confirm all fifteen rows return. Confirm the slim right scrollbar
+    appears for the fifteen-row catalog, mouse-wheel and thumb scrolling reach the
     last row, and the bar auto-hides after filtering the list down to rows that
     fit. Confirm the viewport shows five rows simultaneously when those five
     descriptions each fit on one line. Repeat at a second resolution or UI-scale
     setting and confirm the viewport remains 60% of the active desktop height.
-26. On a disposable v1.0.7 game, confirm all fourteen **[Beta]** rows start
+26. On a disposable v1.0.7 game, confirm all thirteen **[Beta]** rows start
     unchecked. Enable Restore Dust Devils, use a non-100% Dust Devil preset, and
     confirm each natural opportunity performs a percentage roll followed by an
     integer spawn count only on success. Switch to another map during a cycle and
@@ -1018,7 +1019,8 @@ the engine's item-selection translation assertion.
     flash, and the detail page never exposes the raw description before bold
     text, separated paragraphs, indented/spaced lists, and clickable links have
     been formatted. Confirm every screenshot thumbnail appears in API order
-    directly below the main image and clicking each one replaces the large image.
+    directly below the main image and clicking each one replaces the large image,
+    with no `Creating a new key 'ScreenshotUrls'` assertion in the log.
     While another retrieval is active, disable the fix and confirm the worker
     stops, the exact pre-fix description, thumbnail, screenshot URL/path fields,
     and missing-field declaration return, the page refreshes,
@@ -1040,7 +1042,7 @@ Phase 1 (community release): one framework file plus one self-contained file per
                         fix; dedicated SMR Community Fixes checklist with panel-local
                         version filter and staged persistent toggles; Restore
                         Rains scheduler/state/Cloud Seeding repair; Restore
-                        Disasters meteor-state cleanup; and fourteen explicitly
+                        Disasters meteor-state cleanup; and thirteen explicitly
                         labeled default-off v1.0.7 beta fixes.
 Future phases:          add only independently verified v1.0.7 fixes, each as one
                         new self-contained file. Anything that is neither the

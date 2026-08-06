@@ -1,20 +1,34 @@
 -- Restore Mod Details
 --
--- The v1.0.7 Paradox Mods detail page has two related presentation faults.
--- `ModsUIRetrieveModDetails` parses descriptions through HTMLParser, whose
--- anchor implementation deliberately emits inert "label [URL]" text and whose
+-- The v1.0.7 Paradox Mods browser presents mod details through three separate
+-- faults. They are repaired together because they share one code path, and
+-- repairing any one of them alone only exposes the next.
+--
+-- ModsUIRetrieveModDetails parses descriptions through HTMLParser, whose anchor
+-- implementation deliberately emits inert "label [URL]" text and whose
 -- unsupported tags discard their contents. The page already implements
 -- OnHyperLink(OpenUrl), so the parser is leaving working UI support unused.
--- Separately, WaitDownloadModScreenshots caches images only by ModID and
--- PreferredVersion. Replacing an image without publishing a new mod version
--- therefore leaves old thumbnails on disk, while its screenshot branch calls an
--- unavailable function and never populates the detail-page selector.
 --
--- This fix wraps ModsUIRetrieveModDetails and the vanilla thumbnail downloader.
--- Vanilla still performs all of its normal work first. Fix-owned real-time
--- workers format the returned LongDescription with a private HTMLParser instance
--- and download the latest DisplayImagePath and screenshots to unique, fix-owned
--- AppData files.
+-- ModUI_Entry derives from ProtectedPropertyObject, whose __newindex asserts on
+-- any key the class never declared (CommonLua/PropertyObject.lua:1819-1823). The
+-- class declares ScreenshotPaths (CommonLua/UI/ModManager.lua:1229) but never
+-- ScreenshotUrls, which line 797 assigns and ParadoxMods.lua:249 reads back. A
+-- mod that has screenshots therefore asserts on the assignment, and where
+-- asserts halt, the ModsUIDownloadScreenshots call on line 799 is never reached.
+--
+-- WaitDownloadModScreenshots caches images only by ModID and PreferredVersion.
+-- Replacing an image without publishing a new mod version leaves the old
+-- thumbnail on disk, and its screenshot branch calls AsyncPopsDownloadFile,
+-- which is not a Lua global at all - the engine's own comment above that block
+-- reads "todo: this is not working".
+--
+-- This fix declares the missing field, then wraps ModsUIRetrieveModDetails, the
+-- vanilla thumbnail downloader, and the details dialog. Vanilla still performs
+-- all of its normal work first. Fix-owned real-time workers format the returned
+-- LongDescription with a private HTMLParser instance and download the latest
+-- DisplayImagePath and screenshots to unique, fix-owned AppData files. Vanilla's
+-- unfinished screenshot branch is therefore never needed and never repaired: its
+-- URL list is hidden for the duration of the captured call.
 -- List-entry updates download the current thumbnail before their first refresh,
 -- while opening details prepares the complete image selector before the page is
 -- spawned. Detail retrieval defers its refresh until every field is ready. Stale
@@ -36,7 +50,7 @@ local FIX = {
 	default_enabled = false,
 	debug = false,
 	label = "Restore Mod Details",
-	description = "Shows current thumbnails and selectable screenshots with already-formatted HTML/Steam descriptions, Unicode, emoji, and clickable links.",
+	description = "Shows a mod's screenshots, which vanilla never displays, with current thumbnails and already-formatted HTML/Steam descriptions, Unicode, emoji, and clickable links.",
 }
 
 local RETRIEVE_FN = "ModsUIRetrieveModDetails"
@@ -46,7 +60,6 @@ local DIALOG_MODE_FN = "ModsUISetDialogMode"
 local ENTRY_UPDATE_METHOD = "UpdateEntryFromSubscribedMod"
 local ENTRY_CLASS = "ModUI_Entry"
 local SCREENSHOT_URLS_FIELD = "ScreenshotUrls"
-local SCREENSHOT_FIELD_OWNER = "restore_mod_details"
 local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
 local FALLBACK_FONT_NAMES = { "Segoe UI Emoji", "Segoe UI Symbol" }
@@ -530,7 +543,7 @@ end
 
 local RestoreModDetails = rawget(_G, "SMRCFRestoreModDetails")
 if RestoreModDetails == nil then
-	RestoreModDetails = { enabled = false }
+	RestoreModDetails = { enabled = false, field_reported = false }
 	rawset(_G, "SMRCFRestoreModDetails", RestoreModDetails)
 end
 
@@ -702,66 +715,6 @@ if type(Hooks.entry_update_wrapper) ~= "function" then
 end
 if type(shared) == "table" then shared.SMRCF_ModDetailsHooks = Hooks end
 
-local function screenshot_field_lease(class)
-	local holder = type(shared) == "table" and shared or Hooks
-	local lease = holder.SMRCF_ScreenshotUrlsFieldLease
-	if type(lease) ~= "table" then
-		local current = rawget(class, SCREENSHOT_URLS_FIELD)
-		local legacy = type(shared) == "table" and
-			shared.SMRCF_ModScreenshotsHooks or nil
-		local legacy_owned = type(legacy) == "table" and
-			legacy.declared_by_us == true and current == false
-		lease = {
-			owners = {},
-			original = legacy_owned and nil or current,
-			installed = legacy_owned,
-		}
-		if legacy_owned and legacy.enabled == true then
-			lease.owners.restore_mod_screenshots = true
-		end
-		holder.SMRCF_ScreenshotUrlsFieldLease = lease
-	end
-	lease.owners = lease.owners or {}
-	return lease
-end
-
-function RestoreModDetails.AcquireScreenshotField(reason)
-	local class = rawget(_G, ENTRY_CLASS)
-	if type(class) ~= "table" then
-		log("ERROR", "Required screenshot field class is unavailable", {
-			class = ENTRY_CLASS,
-			reason = reason,
-		})
-		return false
-	end
-	local lease = screenshot_field_lease(class)
-	if next(lease.owners) == nil and lease.installed ~= true then
-		lease.original = rawget(class, SCREENSHOT_URLS_FIELD)
-	end
-	if rawget(class, SCREENSHOT_URLS_FIELD) == nil then
-		rawset(class, SCREENSHOT_URLS_FIELD, false)
-		lease.installed = true
-	end
-	lease.owners[SCREENSHOT_FIELD_OWNER] = true
-	return true
-end
-
-function RestoreModDetails.ReleaseScreenshotField(reason)
-	local class = rawget(_G, ENTRY_CLASS)
-	local holder = type(shared) == "table" and shared or Hooks
-	local lease = holder.SMRCF_ScreenshotUrlsFieldLease
-	if type(lease) ~= "table" then return true end
-	lease.owners = lease.owners or {}
-	lease.owners[SCREENSHOT_FIELD_OWNER] = nil
-	if next(lease.owners) == nil and lease.installed == true and
-		type(class) == "table" and
-		rawget(class, SCREENSHOT_URLS_FIELD) == false then
-		rawset(class, SCREENSHOT_URLS_FIELD, lease.original)
-		lease.installed = false
-	end
-	return true
-end
-
 local function correction_context(data)
 	data = data or {}
 	data.fix_id = FIX.id
@@ -780,6 +733,84 @@ local function correction_context(data)
 		end
 	end
 	return data
+end
+
+-- The missing ScreenshotUrls declaration. __newindex accepts any key for which
+-- rawget(class, key) is non-nil, and false matches how the neighbouring
+-- ScreenshotPaths is declared. This is a class-wide change that outlives a Lua
+-- reload, so what was found there is remembered in SharedModEnv rather than in
+-- this chunk, and put back only while the field still holds the value written
+-- here - a declaration a later patch makes official is never undone.
+local function screenshot_field_state(class)
+	local holder = type(shared) == "table" and shared or Hooks
+	local state = holder.SMRCF_ScreenshotUrlsField
+	if type(state) ~= "table" then
+		state = { installed = false, original = rawget(class, SCREENSHOT_URLS_FIELD) }
+		-- Earlier releases declared this field from a second fix file, either on
+		-- its own or through a lease shared with this one. Adopt whichever of
+		-- those recorded the original value, so a reload in the same session
+		-- neither loses it nor leaves the declaration behind.
+		local lease = holder.SMRCF_ScreenshotUrlsFieldLease
+		local legacy = type(shared) == "table" and shared.SMRCF_ModScreenshotsHooks
+		if type(lease) == "table" then
+			state.installed = lease.installed == true
+			state.original = lease.original
+		elseif type(legacy) == "table" and legacy.declared_by_us == true and
+			rawget(class, SCREENSHOT_URLS_FIELD) == false then
+			state.installed = true
+			state.original = nil
+		end
+		holder.SMRCF_ScreenshotUrlsFieldLease = nil
+		holder.SMRCF_ScreenshotUrlsField = state
+	end
+	return state
+end
+
+function RestoreModDetails.AcquireScreenshotField(reason)
+	local class = rawget(_G, ENTRY_CLASS)
+	if type(class) ~= "table" then
+		log("ERROR", "Required screenshot field class is unavailable", {
+			class = ENTRY_CLASS,
+			reason = reason,
+		})
+		return false
+	end
+	local state = screenshot_field_state(class)
+	if state.installed ~= true then
+		state.original = rawget(class, SCREENSHOT_URLS_FIELD)
+	end
+	if rawget(class, SCREENSHOT_URLS_FIELD) == nil then
+		rawset(class, SCREENSHOT_URLS_FIELD, false)
+		state.installed = true
+		if RestoreModDetails.field_reported ~= true then
+			RestoreModDetails.field_reported = true
+			log("INFO", "Bug fix invoked: declared the missing ScreenshotUrls field",
+				correction_context({
+					repair = "declare_screenshot_urls",
+					reason = "ModUI_Entry assigns ScreenshotUrls without declaring it, so ProtectedPropertyObject asserts",
+					class = ENTRY_CLASS,
+					field = SCREENSHOT_URLS_FIELD,
+				}))
+		end
+	end
+	return true
+end
+
+function RestoreModDetails.ReleaseScreenshotField(reason)
+	local class = rawget(_G, ENTRY_CLASS)
+	local holder = type(shared) == "table" and shared or Hooks
+	local state = holder.SMRCF_ScreenshotUrlsField
+	RestoreModDetails.field_reported = false
+	if type(state) ~= "table" then return true end
+	if state.installed == true and type(class) == "table" and
+		rawget(class, SCREENSHOT_URLS_FIELD) == false then
+		rawset(class, SCREENSHOT_URLS_FIELD, state.original)
+		state.installed = false
+		log("INFO", "Removed the ScreenshotUrls declaration this fix added", {
+			reason = reason,
+		})
+	end
+	return true
 end
 
 local function compile_runtime()
@@ -1277,7 +1308,7 @@ function RestoreModDetails.CorrectedDownload(mod, ...)
 	local record = mod and Hooks.modified[mod]
 	local thumbnail = record and record.thumbnail
 	local owned_at_entry = thumbnail and mod.Thumbnail == thumbnail.installed
-	-- Fix 016 downloads current screenshots itself. Hide the URL list only for
+	-- This fix downloads current screenshots itself. Hide the URL list only for
 	-- the captured vanilla call so its broken AsyncPopsDownloadFile branch cannot
 	-- overwrite the ready selector or abort the shared download queue.
 	local screenshot_urls = type(mod) == "table" and
