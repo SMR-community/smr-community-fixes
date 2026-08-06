@@ -2,7 +2,7 @@
 SMR Community Fixes registration tool, in Lua.
 
     lua tools/sync_mod.lua check
-        Inspect every Code/smrcf_restore_*.lua and report two kinds of finding:
+        Inspect every Code/smrcf_*.lua and report two kinds of finding:
           PROBLEM  something only a person can fix - a duplicate id, a pinned
                    number already in use, a template placeholder left behind,
                    debug left true, a reference to framework internals, or a
@@ -91,7 +91,7 @@ local function fix_files()
 	local names = {}
 	for line in pipe:lines() do
 		local name = line:gsub("%s+$", "")
-		if name:match("^smrcf_restore_.+%.lua$") then names[#names + 1] = name end
+		if name:match("^smrcf_.+%.lua$") then names[#names + 1] = name end
 	end
 	pipe:close()
 	table.sort(names)

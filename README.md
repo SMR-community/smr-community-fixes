@@ -25,32 +25,32 @@ badge where the fix is still being tested. Changes stay staged until you press
 **Apply**; **Back** and **Escape** discard them. Your choices persist between
 sessions.
 
-Both stable fixes repair eligible stale state in **existing savegames** as well
-as new games, so you do not need to start over. No fix invents history the game
+Restore Disasters and Restore Rains repair eligible stale state in **existing
+savegames** as well as new games, so you do not need to start over. No fix invents history the game
 never saved.
 
 ## The fixes
 
 `[Beta]` means the fix still needs testing in real games, so it ships **off** by
-default. The two stable fixes ship **on**.
+default. The four stable fixes ship **on**.
 
 | # | Fix | Status | What it repairs |
 |--:|-----|--------|-----------------|
 | 001 | Restore Disasters | Stable, on | Clears stale completed-meteor-storm state that can block cold waves, dust storms, natural rain, Cloud Seeding, Import Greenhouse Gases, Melt the Polar Caps, and Inner Light mirages. |
 | 002 | Restore Rains | Stable, on | Restarts natural and Cloud Seeding rainfall when rain scheduling stalls or its saved state goes stale. |
-| 003 | Restore Dust Devils | Beta | Corrects Dust Devil spawn-chance handling, keeps natural scheduling tied to the surface map, and stops spawns once terraforming disables Dust Storms. |
-| 004 | Restore Asteroid Visits | Beta | Stops ordinary rockets being mistaken for asteroid landers, which opened an empty asteroid-rocket selection screen. |
-| 005 | Restore Soil Overlay | Beta | Keeps the solid soil overlay bound to the surface map instead of drawing surface soil data on another map. |
-| 006 | Restore Saint Blessing | Beta | Applies each Saint's stacking Morale bonus to the Religious colonists in that Saint's Dome, correcting a mismatched trait label. |
-| 007 | Restore SpaceY Description | Beta | Adds SpaceY's missing +20 maximum Drone Hub capacity to its sponsor description. Gameplay values are unchanged. |
-| 008 | Restore Jumbo Cave Reinforcements | Beta | Releases construction sites stuck on unreachable Waste Rock, but only after a drone's normal approach to that exact blocker fails. |
-| 009 | Restore No Disasters Cave-in Protection | Beta | Stops periodic underground marsquakes and cave-ins while the No Disasters rule is active, preserving mystery, scripted, manual, and surface events. |
-| 010 | Restore Trade Rocket Protection | Beta | Stops RC Transports interrupting Universal Trade Rockets, matching the protection legacy trade and refugee rockets already had. |
-| 011 | Restore Asteroid Lander Cargo Safety | Beta | Blocks asteroid Lander payload changes while Drones or passengers are still using the cargo ramp. |
-| 012 | Restore Localized UI Text | Beta | Uses the game's existing official translations for the terraforming heading and the Universal Rocket's Back to Earth action. |
-| 013 | Restore Track Demolition | Beta | Completes terminal track-element demolition and removes invalid Track remnants already stored in existing savegames. |
-| 014 | Restore Clustered Lights | Beta | Stops night lights entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion. |
-| 015 | Restore Mod Details | Beta | Shows the Paradox Mods screenshots vanilla never displays, alongside current thumbnails and already-formatted 20-point HTML/Steam descriptions, including Unicode, emoji, visible bold, lists, and links. |
+| 003 | Restore No Disasters Cave-in Protection | Stable, on | Stops periodic underground marsquakes and cave-ins while the No Disasters rule is active, preserving mystery, scripted, manual, and surface events. |
+| 004 | Repair Mod Manager Browser | Stable, on | Displays each mod’s latest thumbnail and screenshots, and properly formats descriptions, including HTML/Steam markup, Unicode, emoji, and clickable links. |
+| 005 | Restore Dust Devils | Beta | Corrects Dust Devil spawn-chance handling, keeps natural scheduling tied to the surface map, and stops spawns once terraforming disables Dust Storms. |
+| 006 | Restore Asteroid Visits | Beta | Stops ordinary rockets being mistaken for asteroid landers, which opened an empty asteroid-rocket selection screen. |
+| 007 | Restore Soil Overlay | Beta | Keeps the solid soil overlay bound to the surface map instead of drawing surface soil data on another map. |
+| 008 | Restore Saint Blessing | Beta | Applies each Saint's stacking Morale bonus to the Religious colonists in that Saint's Dome, correcting a mismatched trait label. |
+| 009 | Restore SpaceY Description | Beta | Adds SpaceY's missing +20 maximum Drone Hub capacity to its sponsor description. Gameplay values are unchanged. |
+| 010 | Restore Jumbo Cave Reinforcements | Beta | Releases construction sites stuck on unreachable Waste Rock, but only after a drone's normal approach to that exact blocker fails. |
+| 011 | Restore Trade Rocket Protection | Beta | Stops RC Transports interrupting Universal Trade Rockets, matching the protection legacy trade and refugee rockets already had. |
+| 012 | Restore Asteroid Lander Cargo Safety | Beta | Blocks asteroid Lander payload changes while Drones or passengers are still using the cargo ramp. |
+| 013 | Restore Localized UI Text | Beta | Uses the game's existing official translations for the terraforming heading and the Universal Rocket's Back to Earth action. |
+| 014 | Restore Track Demolition | Beta | Completes terminal track-element demolition and removes invalid Track remnants already stored in existing savegames. |
+| 015 | Restore Clustered Lights | Beta | Stops night lights entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion. |
 
 The number is just the row's position in the list, so the list always runs from
 001 with no gaps. Remove a fix and everything below it moves up a number; only
@@ -60,7 +60,7 @@ the fix's name and its saved on/off choice stay put.
 
 ```text
 Code/SMRCommunityFixes.lua      the framework: config, logging, settings, registry, Options entry, checklist UI
-Code/smrcf_restore_<fix>.lua    one bug fix, completely self-contained
+Code/smrcf_<fix>.lua            one bug fix, completely self-contained
 templates/                      the starting point for a new fix (not shipped in the mod)
 tools/sync_mod.lua              registration and consistency checks used by CI
 tools/publish/pdx_client.py     uploads to Paradox Mods; standard library only
@@ -77,7 +77,7 @@ its behaviour without touching anything else.
 ## Contributing
 
 Anyone can add a fix, and adding one is a Lua-only job — no build step and no
-tooling. Start from `templates/smrcf_restore_TEMPLATE.lua`; its header walks you
+tooling. Start from `templates/smrcf_TEMPLATE.lua`; its header walks you
 through the whole process.
 
 The repository has no single owner: everyone in the **SMR-community**

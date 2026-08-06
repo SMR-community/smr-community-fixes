@@ -1,4 +1,4 @@
--- Restore Mod Details
+-- Repair Mod Manager Browser
 --
 -- The v1.0.7 Paradox Mods browser presents mod details through three separate
 -- faults. They are repaired together because they share one code path, and
@@ -43,13 +43,13 @@
 -- function while this wrapper still owns the global.
 
 local FIX = {
-	id = "restore_mod_details",
-	beta = true,
+	id = "repair_mod_manager_browser",
+	beta = false,
 	versions = { ["1.0.7"] = true },
-	default_enabled = false,
+	default_enabled = true,
 	debug = false,
-	label = "Restore Mod Details",
-	description = "Shows a mod's screenshots, which vanilla never displays, with current thumbnails and already-formatted HTML/Steam descriptions, Unicode, emoji, and clickable links.",
+	label = "Repair Mod Manager Browser",
+	description = "Displays each mod’s latest thumbnail and screenshots, and properly formats descriptions, including HTML/Steam markup, Unicode, emoji, and clickable links.",
 }
 
 local RETRIEVE_FN = "ModsUIRetrieveModDetails"

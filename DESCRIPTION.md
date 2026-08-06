@@ -33,7 +33,7 @@ Deployment copies `metadata.lua`, `items.lua`, every registered file under
 * `Code\SMRCommunityFixes.lua` — the single framework file: configuration, logging,
   settings storage, the fix registry, the Options category, the checklist UI, and
   the lifecycle. It never names an individual bug.
-* `Code\smrcf_restore_<fix>.lua` — one bug fix per file. Each is **completely
+* `Code\smrcf_<fix>.lua` — one bug fix per file. Each is **completely
   self-contained**: it may use game/engine globals only (`ModLog`, `GameTime`,
   `const`, `SharedModEnv`, `rawget`, `T`, …) and must not call any function,
   or read any global, defined by another file in this mod. Each carries its own
@@ -58,8 +58,8 @@ framework normalizes the rest when absent — `number` (next free), `beta` (true
 short descriptor is a valid descriptor and the defaults are the conservative ones.
 
 Adding a fix is a Lua-only job and stays that way: no build step, nothing to
-install. A contributor copies `templates\smrcf_restore_TEMPLATE.lua` to
-`Code\smrcf_restore_<fix>.lua` and edits Lua. The two registration entries — one
+install. A contributor copies `templates\smrcf_TEMPLATE.lua` to
+`Code\smrcf_<fix>.lua` and edits Lua. The two registration entries — one
 in the `metadata.lua` `'code'` list, one matching `ModItemCode` in `items.lua` —
 are written by CI as soon as the branch is pushed (section 1B), so nobody adds
 them by hand. `CONTRIBUTING.md` documents the descriptor contract.
@@ -164,7 +164,9 @@ the selected version.
    game version: each one appears only under the versions it was confirmed on,
    declared in its `versions` table, so every game version has its own list and
    no repair runs against a build nobody verified it against. Version `1.0.7`
-   contains Restore Rains, Restore Disasters, and thirteen default-off beta fixes.
+   contains four default-on stable fixes - Restore Disasters, Restore Rains,
+   Restore No Disasters Cave-in Protection and Repair Mod Manager Browser -
+   and eleven default-off beta fixes.
    The dropdown contains **All** and **1.0.7**, defaults to `1.0.7` whenever the
    panel opens, and filters only the displayed rows; **All** never changes the
    active runtime target. Later verified versions are added to the data-driven
@@ -208,7 +210,7 @@ the selected version.
     the default `1.0.7` profile. Every descriptor whose beta badge is enabled
     defaults **disabled** and runs no hook until the user explicitly selects and
     applies it.
-13. The two stable fixes repair eligible stale state in existing v1.0.7 savegames as well as
+13. Restore Disasters and Restore Rains repair eligible stale state in existing v1.0.7 savegames as well as
     games started after the mod is installed. The deferred `LoadGame` lifecycle
     pass must preserve genuinely active disasters while repairing only state that
     the fix can prove stale. Every beta fix can also be enabled in an existing
@@ -216,7 +218,7 @@ the selected version.
     enable/load; transient UI and interaction fixes take effect immediately for
     the next affected action. No module may guess at or reconstruct irreversible
     history that vanilla did not save.
-14. Each bug is a self-registering module whose single `smrcf_restore_*.lua` script
+14. Each bug is a self-registering module whose single `smrcf_*.lua` script
     owns its id, supported versions, default, beta status,
     unnumbered plain-text title and description, own diagnostic flag (`debug`),
     runtime enable/disable function, reload-safe quiesce callback, event
@@ -387,7 +389,7 @@ When enabled, Restore Jumbo Cave Reinforcements must:
 5. Default disabled, restore the captured approach method when disabled, and
    emit timed `Bug fix invoked:` evidence when it releases a stuck site.
 
-## 5H. [Beta] Restore No Disasters Cave-in Protection behavior
+## 5H. Restore No Disasters Cave-in Protection behavior
 
 When enabled, Restore No Disasters Cave-in Protection must:
 
@@ -398,7 +400,7 @@ When enabled, Restore No Disasters Cave-in Protection must:
    when the rule is active, including an existing save.
 3. Preserve mystery, scripted, cheat/manual, and surface marsquakes and cave-ins;
    the No Disasters rule explicitly excludes mystery events.
-4. Default disabled, restore the exact captured repeat condition and only the
+4. Default enabled, restore the exact captured repeat condition and only the
    scheduler threads this fix suppressed when disabled, and emit a timed
    `Bug fix invoked:` event for each map on which it enforces the rule.
 
@@ -486,11 +488,12 @@ When enabled, Restore Clustered Lights must:
 5. Default disabled and emit a timed `Bug fix invoked:` event only when a
    positive vanilla delay is replaced with the atomic turn-on call.
 
-## 5N. [Beta] Restore Mod Details behavior
+## 5N. Repair Mod Manager Browser behavior
 
-Number 015, Restore Mod Screenshots, was merged into this fix in mod version 13.
-Both repaired the same detail path, and either one alone left the other's
-symptom visible, and the catalog renumbered to close the gap.
+Restore Mod Screenshots, previously a fix of its own, was merged into this one
+in mod version 13, and the fix was renamed from Restore Mod Details in version
+14. Both repaired the same detail path, and either one alone left the other's
+symptom visible.
 
 The v1.0.7 detail-page retrieval passes a mod description through the limited
 `HTMLParser` (`CommonLua\UI\ModManager.lua:740-743`). That parser deliberately
@@ -513,7 +516,7 @@ in Browse All, Installed Mods, and the detail page. The same function calls an
 unavailable screenshot downloader, and the detail template creates its selector
 only when screenshot paths already exist at spawn time.
 
-When enabled, Restore Mod Details must:
+When enabled, Repair Mod Manager Browser must:
 
 1. Declare `ScreenshotUrls` on the confirmed v1.0.7 `ModUI_Entry` class as
    `false`, matching how the neighbouring `ScreenshotPaths` is declared, and do
@@ -557,7 +560,7 @@ When enabled, Restore Mod Details must:
    A later third-party field value, text style, or wrapper must be preserved.
 6. Remain idempotent across repeated enable/disable and Lua reload, retrying on
    `GameStateStarting` in case the class or a required function did not exist
-   when first enabled, keep no saved object or marker, default disabled, and
+   when first enabled, keep no saved object or marker, default enabled, and
    emit one timed `Bug fix invoked:` event for each browser entry refresh that
    it actually changes.
 
@@ -583,8 +586,7 @@ code reads it from the engine-injected `CurrentModDef.version`; there is no seco
 version constant.
 
 Each fix owns its own default and its own diagnostic flag inside its descriptor:
-`default_enabled` (true for Restore Rains and Restore Disasters, false for the
-thirteen betas) and `debug = false` for the publish build. A fix's inline logger
+`default_enabled` (true for the four stable fixes, false for the eleven betas) and `debug = false` for the publish build. A fix's inline logger
 emits Info only while its own `debug` is true; `ERROR` is never gated. Setting
 `Config.DEBUG_LOGS = true` also turns on every fix's `debug` when the framework
 adopts the registry, which produces a full diagnostic build in one edit.
@@ -624,8 +626,8 @@ Restore Disasters description: Removes stale completed-meteor-storm state that c
 [Beta] Restore SpaceY Description description: Adds SpaceY's missing +20 maximum Drone Hub command-capacity benefit to its v1.0.7 sponsor description; gameplay values are unchanged.
 [Beta] Restore Jumbo Cave Reinforcements title: Restore Jumbo Cave Reinforcements
 [Beta] Restore Jumbo Cave Reinforcements description: Releases Jumbo Cave Reinforcements construction sites stuck on unreachable Waste Rock in v1.0.7, but only after a drone's normal approach to that exact blocker fails.
-[Beta] Restore No Disasters Cave-in Protection title: Restore No Disasters Cave-in Protection
-[Beta] Restore No Disasters Cave-in Protection description: Stops v1.0.7's periodic underground marsquakes and cave-ins when the No Disasters rule is active, while preserving mystery, scripted, manual, and surface events.
+Restore No Disasters Cave-in Protection title: Restore No Disasters Cave-in Protection
+Restore No Disasters Cave-in Protection description: Stops v1.0.7's periodic underground marsquakes and cave-ins when the No Disasters rule is active, while preserving mystery, scripted, manual, and surface events.
 [Beta] Restore Trade Rocket Protection title: Restore Trade Rocket Protection
 [Beta] Restore Trade Rocket Protection description: Prevents RC Transports from interrupting v1.0.7 Universal Trade Rockets, matching the protection already applied to legacy trade and refugee rockets.
 [Beta] Restore Asteroid Lander Cargo Safety title: Restore Asteroid Lander Cargo Safety
@@ -636,8 +638,8 @@ Restore Disasters description: Removes stale completed-meteor-storm state that c
 [Beta] Restore Track Demolition description: Completes v1.0.7 terminal track-element demolition and removes exact invalid Track shells already stored in existing savegames.
 [Beta] Restore Clustered Lights title: Restore Clustered Lights
 [Beta] Restore Clustered Lights description: Prevents v1.0.7 night lights from entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion.
-[Beta] Restore Mod Details title: Restore Mod Details
-[Beta] Restore Mod Details description: Shows the mod screenshots v1.0.7 never displays, loads current thumbnails throughout the Paradox Mods browser, and restores website-style description formatting with clickable links.
+Repair Mod Manager Browser title: Repair Mod Manager Browser
+Repair Mod Manager Browser description: Displays each mod’s latest thumbnail and screenshots, and properly formats descriptions, including HTML/Steam markup, Unicode, emoji, and clickable links.
 Select group button: Select group
 Unselect group button: Unselect group
 Apply button: Apply
@@ -696,7 +698,7 @@ the engine's item-selection translation assertion.
       all rows for the current version.
 - [ ] All fifteen row numbers appear in the left column for `1.0.7`, running
       from **001** with no gaps; the
-      last thirteen are followed by a separate **[Beta]** badge. All right-column
+      last eleven are followed by a separate **[Beta]** badge. All right-column
       titles are unnumbered.
 - [ ] Changing the version filter rebuilds the visible rows immediately, **All**
       does not change the active `1.0.7` runtime target, and reopening the panel
@@ -731,11 +733,11 @@ the engine's item-selection translation assertion.
 - [ ] Restore Rains defaults enabled on first use and persists its choice.
 - [ ] Restore Disasters defaults enabled on first use and persists its choice.
 - [ ] Restore Dust Devils, Restore Asteroid Visits, Restore Soil Overlay,
-      Restore Saint Blessing, Restore SpaceY Description, and Restore Jumbo Cave
-      Reinforcements, Restore No Disasters Cave-in Protection, and Restore Trade
-      Rocket Protection, Restore Asteroid Lander Cargo Safety, and Restore
-      Localized UI Text, and Restore Track Demolition default disabled on first
-      use and install no runtime hook until Apply.
+      Restore Saint Blessing, Restore SpaceY Description, Restore Jumbo Cave
+      Reinforcements, Restore Trade Rocket Protection, Restore Asteroid Lander
+      Cargo Safety, Restore Localized UI Text, Restore Track Demolition and
+      Restore Clustered Lights default disabled on first use and install no
+      runtime hook until Apply.
 - [ ] Loading an existing v1.0.7 save with either stable fix enabled runs its guarded
       reconciliation after map state is available; no new game is required.
 - [ ] Toggling either checkbox does not apply runtime behavior or persist storage
@@ -822,7 +824,7 @@ the engine's item-selection translation assertion.
       calls to delay zero, leaves instant refreshes and `NightLightsOff()`
       unchanged, restores the exact captured function when disabled, and emits
       one timed correction event for each altered delayed transition.
-- [ ] Restore Mod Details declares the missing `ModUI_Entry.ScreenshotUrls`
+- [ ] Repair Mod Manager Browser declares the missing `ModUI_Entry.ScreenshotUrls`
       field so a mod that has screenshots no longer asserts on the assignment;
       refreshes thumbnails in Browse All, Installed Mods,
       and the selected mod from current full-detail responses before their first
@@ -880,13 +882,13 @@ the engine's item-selection translation assertion.
    confirm only those visible rows change. With enough rows to scroll, move the
    scrollbar away from the top before pressing each group button and confirm its
    position does not move. Press Reset and confirm search clears, the filter
-   returns to `1.0.7`, and every checkbox is cleared, the two stable fixes
+   returns to `1.0.7`, and every checkbox is cleared, the four stable fixes
    included; the summary then reads `0 selected`. Confirm the footer order is Select group, Unselect
    group, Apply, Reset, Back; all labels are centered; the toolbar summary reads
    `15 shown / 15 total / <n> selected` and updates with staged checkbox changes;
    and no numeric fix count appears below the list.
 9. Open the checklist and confirm all fifteen rows render: checkbox, number,
-   `[Beta]` badge on 003-015, then the plain-text title above its explanation. No
+   `[Beta]` badge on 005-015, then the plain-text title above its explanation. No
    `Translate` assertion or missing-text row may appear, and no forecast box or
    diagnostic overlay may appear anywhere during play.
 10. Toggle Restore Disasters off and press Apply; confirm vanilla behavior returns
@@ -941,7 +943,7 @@ the engine's item-selection translation assertion.
     fit. Confirm the viewport shows five rows simultaneously when those five
     descriptions each fit on one line. Repeat at a second resolution or UI-scale
     setting and confirm the viewport remains 60% of the active desktop height.
-26. On a disposable v1.0.7 game, confirm all thirteen **[Beta]** rows start
+26. On a disposable v1.0.7 game, confirm all eleven **[Beta]** rows start
     unchecked. Enable Restore Dust Devils, use a non-100% Dust Devil preset, and
     confirm each natural opportunity performs a percentage roll followed by an
     integer spawn count only on success. Switch to another map during a cycle and
@@ -1013,7 +1015,7 @@ the engine's item-selection translation assertion.
     `atomic_night_light_turn_on` correction for each positive-delay transition.
     Disable the fix and confirm the captured `NightLightsOn()` function is
     restored and no correction event is emitted on the next transition.
-38. Enable Restore Mod Details and view Browse All, Installed Mods, and a mod
+38. Enable Repair Mod Manager Browser and view Browse All, Installed Mods, and a mod
     whose thumbnail was replaced without a version bump and whose description
     contains HTML or Steam headings, bold or italic text, lists, Unicode arrows,
     numeric emoji entities, HTTP/HTTPS links, and multiple screenshots. Confirm
@@ -1044,7 +1046,7 @@ Phase 1 (community release): one framework file plus one self-contained file per
                         fix; dedicated SMR Community Fixes checklist with panel-local
                         version filter and staged persistent toggles; Restore
                         Rains scheduler/state/Cloud Seeding repair; Restore
-                        Disasters meteor-state cleanup; and thirteen explicitly
+                        Disasters meteor-state cleanup; and eleven explicitly
                         labeled default-off v1.0.7 beta fixes.
 Future phases:          add only independently verified v1.0.7 fixes, each as one
                         new self-contained file. Anything that is neither the

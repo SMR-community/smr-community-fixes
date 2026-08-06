@@ -1,7 +1,7 @@
--- TEMPLATE - copy this template to Code/smrcf_restore_<your_fix>.lua.
+-- TEMPLATE - copy this template to Code/smrcf_<your_fix>.lua.
 --
 -- Start by renaming the four names below. For example: to repair the game
--- global GetOverlayGrid(), copy this file to Code/smrcf_restore_soil_overlay.lua
+-- global GetOverlayGrid(), copy this file to Code/smrcf_soil_overlay.lua
 -- and replace every occurrence of
 --
 --   VanillaFunctionName    ->  GetOverlayGrid            the global you repair

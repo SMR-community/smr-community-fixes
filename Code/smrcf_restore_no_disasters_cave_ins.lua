@@ -26,9 +26,9 @@
 --   label/description  plain text for the checklist row (rendered untranslated)
 local FIX = {
 	id = "restore_no_disasters_cave_ins",
-	beta = true,
+	beta = false,
 	versions = { ["1.0.7"] = true },
-	default_enabled = false,
+	default_enabled = true,
 	debug = false,
 	label = "Restore No Disasters Cave-in Protection",
 	description = "Stops v1.0.7's periodic underground marsquakes and cave-ins when the No Disasters rule is active, while preserving mystery, scripted, manual, and surface events.",

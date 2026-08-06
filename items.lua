@@ -12,6 +12,14 @@ return {
 		'CodeFileName', "Code/smrcf_restore_rains.lua",
 	}),
 	PlaceObj('ModItemCode', {
+		'name', "smrcf_restore_no_disasters_cave_ins",
+		'CodeFileName', "Code/smrcf_restore_no_disasters_cave_ins.lua",
+	}),
+	PlaceObj('ModItemCode', {
+		'name', "smrcf_repair_mod_manager_browser",
+		'CodeFileName', "Code/smrcf_repair_mod_manager_browser.lua",
+	}),
+	PlaceObj('ModItemCode', {
 		'name', "smrcf_restore_dust_devils",
 		'CodeFileName', "Code/smrcf_restore_dust_devils.lua",
 	}),
@@ -36,10 +44,6 @@ return {
 		'CodeFileName', "Code/smrcf_restore_jumbo_cave.lua",
 	}),
 	PlaceObj('ModItemCode', {
-		'name', "smrcf_restore_no_disasters_cave_ins",
-		'CodeFileName', "Code/smrcf_restore_no_disasters_cave_ins.lua",
-	}),
-	PlaceObj('ModItemCode', {
 		'name', "smrcf_restore_trade_rocket_protection",
 		'CodeFileName', "Code/smrcf_restore_trade_rocket_protection.lua",
 	}),
@@ -58,9 +62,5 @@ return {
 	PlaceObj('ModItemCode', {
 		'name', "smrcf_restore_clustered_lights",
 		'CodeFileName', "Code/smrcf_restore_clustered_lights.lua",
-	}),
-	PlaceObj('ModItemCode', {
-		'name', "smrcf_restore_mod_details",
-		'CodeFileName', "Code/smrcf_restore_mod_details.lua",
 	}),
 }

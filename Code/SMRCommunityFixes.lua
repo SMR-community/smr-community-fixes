@@ -8,7 +8,7 @@
 -- fix that disappeared since the previous Lua load, and drives everything else:
 -- settings storage, the Options category, and the checklist UI.
 --
--- Descriptor contract (see templates/smrcf_restore_TEMPLATE.lua):
+-- Descriptor contract (see templates/smrcf_TEMPLATE.lua):
 --   id              string, unique, permanent - the saved-settings key
 --   number          integer, unique - the row number shown in the panel. Every
 --                   shipped fix leaves it out, so the rows are numbered by list

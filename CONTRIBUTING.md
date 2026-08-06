@@ -18,8 +18,8 @@ and the game must behave exactly as it does without this mod.
 1. **Confirm the bug in the game's own Lua source.** Invent nothing — every
    function, class, preset and property you touch must exist in the installed
    version. Note the source file you confirmed it in, in your header.
-2. **Copy `templates/smrcf_restore_TEMPLATE.lua`** to
-   `Code/smrcf_restore_<your_fix>.lua`. Its header lists the four names to
+2. **Copy `templates/smrcf_TEMPLATE.lua`** to
+   `Code/smrcf_<your_fix>.lua`. Its header lists the four names to
    rename; do all four, then Ctrl+F each one again. Two of them are strings, so
    a missed rename still loads — while silently sharing another fix's state.
 3. **Write the repair.** Capture the vanilla function, wrap it, correct only the
@@ -48,7 +48,7 @@ allowed when you are confident — registration then happens on `main` instead.
 
 ```text
 Code/SMRCommunityFixes.lua      the framework: config, logging, settings, registry, Options entry, checklist UI
-Code/smrcf_restore_<fix>.lua    one bug fix, completely self-contained
+Code/smrcf_<fix>.lua            one bug fix, completely self-contained
 ```
 
 Nothing else belongs in `Code/`. The template lives in `templates/` because a
@@ -179,14 +179,14 @@ either run `lua tools/sync_mod.lua sync` (any Lua 5.4), or add these by hand:
 
 ```lua
 -- metadata.lua, anywhere in the 'code' list
-"Code/smrcf_restore_<your_fix>.lua",
+"Code/smrcf_<your_fix>.lua",
 ```
 
 ```lua
 -- items.lua, same position
 PlaceObj('ModItemCode', {
-    'name', "smrcf_restore_<your_fix>",
-    'CodeFileName', "Code/smrcf_restore_<your_fix>.lua",
+    'name', "smrcf_<your_fix>",
+    'CodeFileName', "Code/smrcf_<your_fix>.lua",
 }),
 ```
 
