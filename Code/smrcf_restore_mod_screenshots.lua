@@ -63,6 +63,7 @@ local FIX = {
 
 local CLASS_NAME = "ModUI_Entry"
 local FIELD_NAME = "ScreenshotUrls"
+local FIELD_OWNER = "restore_mod_screenshots"
 local DOWNLOAD_FN = "WaitDownloadModScreenshots"
 
 -- Corrected WaitDownloadModScreenshots body. Compiled into the game environment
@@ -229,6 +230,29 @@ if type(shared) == "table" then
 	shared.SMRCF_ModScreenshotsHooks = Hooks
 end
 
+-- Fix 016 also repairs screenshots so either option can work independently.
+-- A shared ownership lease prevents one fix from removing the protected-object
+-- declaration while the other still needs it.
+local function screenshot_field_lease(class)
+	local holder = type(shared) == "table" and shared or Hooks
+	local lease = holder.SMRCF_ScreenshotUrlsFieldLease
+	if type(lease) ~= "table" then
+		local current = rawget(class, FIELD_NAME)
+		local legacy_owned = Hooks.declared_by_us == true and current == false
+		lease = {
+			owners = {},
+			original = legacy_owned and nil or current,
+			installed = legacy_owned,
+		}
+		if legacy_owned and Hooks.enabled == true then
+			lease.owners[FIELD_OWNER] = true
+		end
+		holder.SMRCF_ScreenshotUrlsFieldLease = lease
+	end
+	lease.owners = lease.owners or {}
+	return lease
+end
+
 -- Calls the vanilla download. Hooks.in_call is raised for the duration so that if
 -- vanilla reaches this same function again, the wrapper passes it straight through
 -- instead of recursing. pcall only guarantees the flag comes back down; the error
@@ -296,16 +320,22 @@ function RestoreModScreenshots.DeclareField(reason)
 		})
 		return false
 	end
-	if rawget(class, FIELD_NAME) ~= nil then
-		-- Already declared, either by us or by a patched game. Nothing to correct.
-		log("INFO", "Field already declared; nothing to do", { reason = reason })
-		return true
+	local lease = screenshot_field_lease(class)
+	if next(lease.owners) == nil and lease.installed ~= true then
+		lease.original = rawget(class, FIELD_NAME)
 	end
-	rawset(class, FIELD_NAME, false)
-	Hooks.declared_by_us = true
+	local corrected = rawget(class, FIELD_NAME) == nil
+	if corrected then
+		rawset(class, FIELD_NAME, false)
+		lease.installed = true
+	end
+	lease.owners[FIELD_OWNER] = true
+	Hooks.declared_by_us = false
 	if RestoreModScreenshots.correction_reported ~= true then
 		RestoreModScreenshots.correction_reported = true
-		log("INFO", "Bug fix invoked: declared the missing ScreenshotUrls field", correction_context({
+		log("INFO", corrected and
+			"Bug fix invoked: declared the missing ScreenshotUrls field" or
+			"ScreenshotUrls field already available", correction_context({
 			repair = "declare_screenshot_urls",
 			reason = "ModUI_Entry assigns ScreenshotUrls without declaring it, so ProtectedPropertyObject asserts",
 			class = CLASS_NAME,
@@ -317,12 +347,17 @@ end
 
 function RestoreModScreenshots.RemoveField(reason)
 	local class = rawget(_G, CLASS_NAME)
-	-- Only remove what this module added, and only while it is still the value
-	-- this module wrote, so a later official declaration is never undone.
-	if type(class) == "table" and Hooks.declared_by_us == true
-		and rawget(class, FIELD_NAME) == false then
-		rawset(class, FIELD_NAME, nil)
-		log("INFO", "Removed the declaration this fix added", { reason = reason })
+	local holder = type(shared) == "table" and shared or Hooks
+	local lease = holder.SMRCF_ScreenshotUrlsFieldLease
+	if type(lease) == "table" then
+		lease.owners = lease.owners or {}
+		lease.owners[FIELD_OWNER] = nil
+		if next(lease.owners) == nil and lease.installed == true and
+			type(class) == "table" and rawget(class, FIELD_NAME) == false then
+			rawset(class, FIELD_NAME, lease.original)
+			lease.installed = false
+			log("INFO", "Removed the declaration this fix added", { reason = reason })
+		end
 	end
 	Hooks.declared_by_us = false
 	RestoreModScreenshots.correction_reported = false

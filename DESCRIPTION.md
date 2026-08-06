@@ -517,11 +517,13 @@ The v1.0.7 detail-page retrieval passes a mod description through the limited
 `HTMLParser` (`CommonLua\UI\ModManager.lua:740-743`). That parser deliberately
 turns anchors into inert `label [URL]` text and discards the contents of HTML
 tags it does not recognize (`CommonLua\X\HTMLParser.lua:67-143`), even though
-`ModsUIModDetails` already handles `OpenUrl` hyperlinks. Thumbnail downloads
-also reuse a cache name made only from ModID and PreferredVersion
-(`CommonLua\Libs\Paradox\ParadoxMods.lua:218-245`), so replacing an image
+`ModsUIModDetails` already handles `OpenUrl` hyperlinks. Image downloads also
+reuse a cache name made only from ModID and PreferredVersion
+(`CommonLua\Libs\Paradox\ParadoxMods.lua:218-276`), so replacing an image
 without publishing a new mod version leaves the old thumbnail in Browse All,
-Installed Mods, and the detail page.
+Installed Mods, and the detail page. The same function calls an unavailable
+screenshot downloader, and the detail template creates its selector only when
+screenshot paths already exist at spawn time.
 
 When enabled, Restore Mod Details must:
 
@@ -533,6 +535,9 @@ When enabled, Restore Mod Details must:
    `WaitDownloadModScreenshots` so it fetches the current thumbnail before a
    newly loaded Browse All or Installed Mods entry first renders, while
    preserving vanilla's queued work and suppressing its stale-cache refresh.
+   It must also prepare current screenshots before `ModsUISetDialogMode` opens
+   details, allowing the existing selector below the main image to spawn and
+   retain its vanilla click-to-select behavior.
 2. Detect HTML or Steam BBCode descriptions and parse them with private parser
    instances. Retain headings, bold/italic/underline text, lists, quotes, code,
    separators, and safe HTTP/HTTPS links; decode numeric Unicode entities; wrap
@@ -540,11 +545,13 @@ When enabled, Restore Mod Details must:
    at 20 points with a fix-owned visibly bold Noto style. It must not change the
    global `HTMLParser` or `SteamParser` classes.
 3. Download the current full response's `DisplayImagePath` for detail and list
-   entries with cache-revalidation headers into a unique fix-owned file, without
-   deleting or overwriting the vanilla screenshot/thumbnail cache, then refresh
-   the visible UI with `ModUI_Entry:ObjModified()`.
+   entries plus every valid `Screenshots[].Image` in API order, using
+   cache-revalidation headers and unique fix-owned files without deleting or
+   overwriting the vanilla cache. Populate `ScreenshotPaths` atomically before
+   the first detail render, then refresh with `ModUI_Entry:ObjModified()`.
 4. Keep reload-safe ownership records for every `LongDescription`, `Thumbnail`,
-   worker, file, text style, and fallback-font list it changes. Disabling or
+   `ScreenshotUrls`, `ScreenshotPaths`, worker, file, text style, class field,
+   and fallback-font list it changes. Disabling or
    quiescing must first close the gate and cancel its workers, restore a field
    only while it still equals this fix's installed value, refresh restored
    entries, delete only
@@ -631,7 +638,7 @@ Restore Disasters description: Removes stale completed-meteor-storm state that c
 [Beta] Restore Clustered Lights title: Restore Clustered Lights
 [Beta] Restore Clustered Lights description: Prevents v1.0.7 night lights from entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion.
 [Beta] Restore Mod Details title: Restore Mod Details
-[Beta] Restore Mod Details description: Loads current thumbnails throughout the Paradox Mods browser and restores website-style description formatting with clickable links.
+[Beta] Restore Mod Details description: Loads current thumbnails and selectable detail-page screenshots throughout the Paradox Mods browser and restores website-style description formatting with clickable links.
 Select group button: Select group
 Unselect group button: Unselect group
 Apply button: Apply
@@ -819,8 +826,10 @@ the engine's item-selection translation assertion.
       populated render without flashing the stale cache; withholds raw detail
       text until HTML or Steam BBCode has been formatted at 20 points with
       visible bold, Unicode arrows/symbols/emoji, website-style paragraph/list
-      spacing, and clickable HTTP/HTTPS links; and does not alter the vanilla
-      cache or global parser classes. Disabling during
+      spacing, and clickable HTTP/HTTPS links; and displays API screenshots in
+      order below the main image before the page first renders, with each
+      thumbnail selecting the large image through the vanilla control. It does
+      not alter the vanilla cache or global parser classes. Disabling during
       and after retrieval cancels its work, restores only fields, styles, and
       wrappers it still owns, deletes every file it created, preserves later
       third-party changes, and refreshes visible entries.
@@ -1004,13 +1013,15 @@ the engine's item-selection translation assertion.
 38. Enable Restore Mod Details and view Browse All, Installed Mods, and a mod
     whose thumbnail was replaced without a version bump and whose description
     contains HTML or Steam headings, bold or italic text, lists, Unicode arrows,
-    numeric emoji entities, and HTTP/HTTPS links. Confirm
+    numeric emoji entities, HTTP/HTTPS links, and multiple screenshots. Confirm
     only the current thumbnail is visible in all three views, with no stale-cache
     flash, and the detail page never exposes the raw description before bold
     text, separated paragraphs, indented/spaced lists, and clickable links have
-    been formatted.
+    been formatted. Confirm every screenshot thumbnail appears in API order
+    directly below the main image and clicking each one replaces the large image.
     While another retrieval is active, disable the fix and confirm the worker
-    stops, the exact pre-fix description and thumbnail return, the page refreshes,
+    stops, the exact pre-fix description, thumbnail, screenshot URL/path fields,
+    and missing-field declaration return, the page refreshes,
     and no `SMRCFModDetails_*` file remains in AppData. Repeat after installing a
     later wrapper, field value, or text style and confirm that third-party value
     is preserved.

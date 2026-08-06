@@ -5,19 +5,21 @@
 -- anchor implementation deliberately emits inert "label [URL]" text and whose
 -- unsupported tags discard their contents. The page already implements
 -- OnHyperLink(OpenUrl), so the parser is leaving working UI support unused.
--- Separately, WaitDownloadModScreenshots caches thumbnails only by ModID and
--- PreferredVersion. Replacing a thumbnail without publishing a new mod version
--- therefore leaves the old image on disk in Browse All, Installed Mods, and the
--- detail page.
+-- Separately, WaitDownloadModScreenshots caches images only by ModID and
+-- PreferredVersion. Replacing an image without publishing a new mod version
+-- therefore leaves old thumbnails on disk, while its screenshot branch calls an
+-- unavailable function and never populates the detail-page selector.
 --
 -- This fix wraps ModsUIRetrieveModDetails and the vanilla thumbnail downloader.
 -- Vanilla still performs all of its normal work first. Fix-owned real-time
 -- workers format the returned LongDescription with a private HTMLParser instance
--- and download the latest DisplayImagePath to unique, fix-owned AppData files.
+-- and download the latest DisplayImagePath and screenshots to unique, fix-owned
+-- AppData files.
 -- List-entry updates download the current thumbnail before their first refresh,
--- and detail retrieval defers its refresh until formatting finishes. The stale
--- cached image and raw description therefore never reach the UI. The vanilla
--- screenshot cache is never edited.
+-- while opening details prepares the complete image selector before the page is
+-- spawned. Detail retrieval defers its refresh until every field is ready. Stale
+-- images and raw descriptions therefore never reach the UI, and the existing
+-- thumbnail-click behavior selects which image is shown at full size.
 --
 -- AsyncWebRequest and the file APIs are unavailable in a mod environment. The
 -- worker is compiled through LuaCodeToTuple without an env argument, matching
@@ -34,13 +36,17 @@ local FIX = {
 	default_enabled = false,
 	debug = false,
 	label = "Restore Mod Details",
-	description = "Shows only current thumbnails and already-formatted HTML/Steam descriptions with Unicode, emoji, and clickable links.",
+	description = "Shows current thumbnails and selectable screenshots with already-formatted HTML/Steam descriptions, Unicode, emoji, and clickable links.",
 }
 
 local RETRIEVE_FN = "ModsUIRetrieveModDetails"
 local DOWNLOAD_FN = "WaitDownloadModScreenshots"
 local SCHEDULE_FN = "ModsUIDownloadScreenshots"
+local DIALOG_MODE_FN = "ModsUISetDialogMode"
 local ENTRY_UPDATE_METHOD = "UpdateEntryFromSubscribedMod"
+local ENTRY_CLASS = "ModUI_Entry"
+local SCREENSHOT_URLS_FIELD = "ScreenshotUrls"
+local SCREENSHOT_FIELD_OWNER = "restore_mod_details"
 local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
 local FALLBACK_FONT_NAMES = { "Segoe UI Emoji", "Segoe UI Symbol" }
@@ -72,9 +78,60 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		changed = false,
 		description = false,
 		thumbnail = false,
+		screenshots = false,
+		screenshot_count = 0,
 		mod_id = details.ModID,
 	}
 	local failures = {}
+
+	local function same_array(left, right)
+		if type(left) ~= "table" or type(right) ~= "table" or #left ~= #right then
+			return false
+		end
+		for index = 1, #left do
+			if left[index] ~= right[index] then return false end
+		end
+		return true
+	end
+
+	local function reserve_and_download(url, kind, index)
+		local clean_url = url:match("^[^?#]+") or url
+		local ext = string.lower(clean_url:match("%.([%w]+)$") or "jpg")
+		local allowed = { jpg = true, jpeg = true, png = true, bmp = true, tga = true }
+		if not allowed[ext] then ext = "jpg" end
+		local mod_id = tostring(details.ModID or "unknown"):gsub("[^%w_-]", "_")
+		hooks.next_file = (hooks.next_file or 0) + 1
+		local nonce = hooks.next_file
+		local base
+		repeat
+			base = string.format("AppData/SMRCFModDetails_%s_%s_%s_%s_%s",
+				mod_id, kind, tostring(index or 0), tostring(RealTime()), tostring(nonce))
+			nonce = nonce + 1
+		until not io.exists(base .. ".temp") and not io.exists(base .. "." .. ext)
+		hooks.next_file = nonce
+		local temp_path = base .. ".temp"
+		local final_path = base .. "." .. ext
+		hooks.owned_paths[temp_path] = true
+		hooks.owned_paths[final_path] = true
+
+		local err, data = AsyncWebRequest({
+			method = "GET",
+			url = url,
+			headers = { ["Cache-Control"] = "no-cache", Pragma = "no-cache" },
+			pstr_response = true,
+		})
+		if not err and hooks.enabled == true and hooks.generation == generation then
+			err = AsyncStringToFile(ConvertToOSPath(temp_path), data)
+		end
+		if not err and hooks.enabled == true and hooks.generation == generation then
+			err = AsyncFileRename(ConvertToOSPath(temp_path), ConvertToOSPath(final_path))
+			if not err then hooks.owned_paths[temp_path] = nil end
+		end
+		if hooks.enabled ~= true or hooks.generation ~= generation then
+			return nil, "cancelled"
+		end
+		return not err and final_path or nil, err
+	end
 
 	local function format_description(input)
 		local function encode_utf8(codepoint)
@@ -338,57 +395,96 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 
 	local url = details.DisplayImagePath
 	if type(url) == "string" and url ~= "" then
-		local clean_url = url:match("^[^?#]+") or url
-		local ext = string.lower(clean_url:match("%.([%w]+)$") or "jpg")
-		local allowed = { jpg = true, jpeg = true, png = true, bmp = true, tga = true }
-		if not allowed[ext] then ext = "jpg" end
-		local mod_id = tostring(details.ModID or "unknown"):gsub("[^%w_-]", "_")
-		hooks.next_file = (hooks.next_file or 0) + 1
-		local nonce = hooks.next_file
-		local base
-		repeat
-			base = string.format("AppData/SMRCFModDetails_%s_%s_%s", mod_id,
-				tostring(RealTime()), tostring(nonce))
-			nonce = nonce + 1
-		until not io.exists(base .. ".temp") and not io.exists(base .. "." .. ext)
-		hooks.next_file = nonce
-		local temp_path = base .. ".temp"
-		local final_path = base .. "." .. ext
-		hooks.owned_paths[temp_path] = true
-		hooks.owned_paths[final_path] = true
+		local existing = hooks.modified[mod]
+		existing = existing and existing.thumbnail
+		local ready = existing and existing.url == url and
+			mod.Thumbnail == existing.installed and io.exists(existing.installed)
+		if not ready then
+			local final_path, err = reserve_and_download(url, "thumbnail", 0)
+			if err then
+				failures[#failures + 1] = "thumbnail download: " .. tostring(err)
+			elseif final_path then
+				local record = hooks.modified[mod] or {}
+				local old = record.thumbnail
+				local original = mod.Thumbnail
+				if old and original == old.installed then original = old.original end
+				mod.Thumbnail = final_path
+				record.thumbnail = { original = original, installed = final_path, url = url }
+				hooks.modified[mod] = record
+				report.changed = true
+				report.thumbnail = true
+				local notify = rawget(_G, "Msg")
+				if type(notify) == "function" then
+					notify("PdxModsThumbnailDownloaded", mod)
+				else
+					mod:ObjModified()
+				end
+			end
+		end
+	end
 
-		local err, data = AsyncWebRequest({
-			method = "GET",
-			url = url,
-			headers = { ["Cache-Control"] = "no-cache", Pragma = "no-cache" },
-			pstr_response = true,
-		})
-		if not err and hooks.enabled == true and hooks.generation == generation then
-			err = AsyncStringToFile(ConvertToOSPath(temp_path), data)
+	if hooks.enabled ~= true or hooks.generation ~= generation then
+		return report
+	end
+
+	local screenshot_urls = {}
+	local seen_urls = {}
+	local screenshots = details.Screenshots
+	if type(screenshots) == "table" then
+		for index = 1, #screenshots do
+			local item = screenshots[index]
+			local screenshot_url = type(item) == "table" and item.Image or item
+			if type(screenshot_url) == "string" and screenshot_url ~= "" and
+				not seen_urls[screenshot_url] then
+				seen_urls[screenshot_url] = true
+				screenshot_urls[#screenshot_urls + 1] = screenshot_url
+			end
 		end
-		if not err and hooks.enabled == true and hooks.generation == generation then
-			err = AsyncFileRename(ConvertToOSPath(temp_path), ConvertToOSPath(final_path))
-			if not err then hooks.owned_paths[temp_path] = nil end
+	end
+
+	local record = hooks.modified[mod] or {}
+	local old = record.screenshots
+	local ready = old and old.installed == mod.ScreenshotPaths and
+		same_array(old.urls, screenshot_urls)
+	if ready then
+		for index = 1, #old.installed do
+			if not io.exists(old.installed[index]) then ready = false break end
 		end
-		if err then
-			failures[#failures + 1] = "thumbnail download: " .. tostring(err)
-		elseif hooks.enabled == true and hooks.generation == generation then
-			local record = hooks.modified[mod] or {}
-			local old = record.thumbnail
-			local original = mod.Thumbnail
+	end
+	if not ready then
+		local paths = {}
+		for index = 1, #screenshot_urls do
+			local path, err = reserve_and_download(screenshot_urls[index],
+				"screenshot", index)
+			if path then
+				paths[#paths + 1] = path
+			else
+				failures[#failures + 1] = "screenshot " .. tostring(index) ..
+					" download: " .. tostring(err)
+			end
+		end
+		if hooks.enabled == true and hooks.generation == generation then
+			local original = mod.ScreenshotPaths
 			if old and original == old.installed then original = old.original end
-			mod.Thumbnail = final_path
-			record.thumbnail = { original = original, installed = final_path }
+			mod.ScreenshotPaths = paths
+			record.screenshots = {
+				original = original,
+				installed = paths,
+				urls = screenshot_urls,
+			}
 			hooks.modified[mod] = record
 			report.changed = true
-			report.thumbnail = true
+			report.screenshots = true
+			report.screenshot_count = #paths
 			local notify = rawget(_G, "Msg")
 			if type(notify) == "function" then
-				notify("PdxModsThumbnailDownloaded", mod)
+				notify("PopsModsScreenshotsDownloaded", mod)
 			else
 				mod:ObjModified()
 			end
 		end
+	else
+		report.screenshot_count = #old.installed
 	end
 
 	return report, #failures > 0 and table.concat(failures, "; ") or nil
@@ -443,12 +539,12 @@ local previous_hooks = type(shared) == "table" and shared.SMRCF_ModDetailsHooks 
 local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
-	Hooks.protocol = 4
+	Hooks.protocol = 5
 	Hooks.worker_fn = nil
 	Hooks.cleanup_fn = nil
 else
 	Hooks = {
-		protocol = 4,
+		protocol = 5,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -460,6 +556,9 @@ else
 		schedule_original = rawget(_G, SCHEDULE_FN),
 		schedule_wrapper = false,
 		schedule_in_call = false,
+		dialog_original = rawget(_G, DIALOG_MODE_FN),
+		dialog_wrapper = false,
+		dialog_in_call = false,
 		workers = {},
 		modified = setmetatable({}, { __mode = "k" }),
 		owned_paths = {},
@@ -486,6 +585,7 @@ Hooks.notification_gates = Hooks.notification_gates or
 	setmetatable({}, { __mode = "k" })
 Hooks.download_original = Hooks.download_original or rawget(_G, DOWNLOAD_FN)
 Hooks.schedule_original = Hooks.schedule_original or rawget(_G, SCHEDULE_FN)
+Hooks.dialog_original = Hooks.dialog_original or rawget(_G, DIALOG_MODE_FN)
 Hooks.body_style_id = BODY_STYLE_ID
 Hooks.bold_style_id = BOLD_STYLE_ID
 
@@ -520,6 +620,15 @@ if current_schedule ~= Hooks.schedule_wrapper and type(current_schedule) == "fun
 	Hooks.schedule_original = current_schedule
 end
 Hooks.schedule_base_original = Hooks.schedule_base_original or Hooks.schedule_original
+
+local current_dialog = rawget(_G, DIALOG_MODE_FN)
+if current_dialog ~= Hooks.dialog_wrapper and type(current_dialog) == "function" then
+	if current_dialog ~= Hooks.dialog_original then
+		Hooks.dialog_original_may_contain_wrapper = true
+	end
+	Hooks.dialog_original = current_dialog
+end
+Hooks.dialog_base_original = Hooks.dialog_base_original or Hooks.dialog_original
 
 if current_entry_update ~= Hooks.entry_update_wrapper and
 	type(current_entry_update) == "function" then
@@ -565,6 +674,18 @@ if type(Hooks.schedule_wrapper) ~= "function" then
 		return Hooks.schedule_original(...)
 	end
 end
+if type(Hooks.dialog_wrapper) ~= "function" then
+	Hooks.dialog_wrapper = function(...)
+		if Hooks.dialog_in_call == true then return Hooks.dialog_base_original(...) end
+		if Hooks.enabled == true and type(Hooks.dialog_impl) == "function" then
+			return Hooks.dialog_impl(...)
+		end
+		if Hooks.dialog_original_may_contain_wrapper == true then
+			return Hooks.dialog_base_original(...)
+		end
+		return Hooks.dialog_original(...)
+	end
+end
 if type(Hooks.entry_update_wrapper) ~= "function" then
 	Hooks.entry_update_wrapper = function(...)
 		if Hooks.entry_update_in_call == true then
@@ -580,6 +701,66 @@ if type(Hooks.entry_update_wrapper) ~= "function" then
 	end
 end
 if type(shared) == "table" then shared.SMRCF_ModDetailsHooks = Hooks end
+
+local function screenshot_field_lease(class)
+	local holder = type(shared) == "table" and shared or Hooks
+	local lease = holder.SMRCF_ScreenshotUrlsFieldLease
+	if type(lease) ~= "table" then
+		local current = rawget(class, SCREENSHOT_URLS_FIELD)
+		local legacy = type(shared) == "table" and
+			shared.SMRCF_ModScreenshotsHooks or nil
+		local legacy_owned = type(legacy) == "table" and
+			legacy.declared_by_us == true and current == false
+		lease = {
+			owners = {},
+			original = legacy_owned and nil or current,
+			installed = legacy_owned,
+		}
+		if legacy_owned and legacy.enabled == true then
+			lease.owners.restore_mod_screenshots = true
+		end
+		holder.SMRCF_ScreenshotUrlsFieldLease = lease
+	end
+	lease.owners = lease.owners or {}
+	return lease
+end
+
+function RestoreModDetails.AcquireScreenshotField(reason)
+	local class = rawget(_G, ENTRY_CLASS)
+	if type(class) ~= "table" then
+		log("ERROR", "Required screenshot field class is unavailable", {
+			class = ENTRY_CLASS,
+			reason = reason,
+		})
+		return false
+	end
+	local lease = screenshot_field_lease(class)
+	if next(lease.owners) == nil and lease.installed ~= true then
+		lease.original = rawget(class, SCREENSHOT_URLS_FIELD)
+	end
+	if rawget(class, SCREENSHOT_URLS_FIELD) == nil then
+		rawset(class, SCREENSHOT_URLS_FIELD, false)
+		lease.installed = true
+	end
+	lease.owners[SCREENSHOT_FIELD_OWNER] = true
+	return true
+end
+
+function RestoreModDetails.ReleaseScreenshotField(reason)
+	local class = rawget(_G, ENTRY_CLASS)
+	local holder = type(shared) == "table" and shared or Hooks
+	local lease = holder.SMRCF_ScreenshotUrlsFieldLease
+	if type(lease) ~= "table" then return true end
+	lease.owners = lease.owners or {}
+	lease.owners[SCREENSHOT_FIELD_OWNER] = nil
+	if next(lease.owners) == nil and lease.installed == true and
+		type(class) == "table" and
+		rawget(class, SCREENSHOT_URLS_FIELD) == false then
+		rawset(class, SCREENSHOT_URLS_FIELD, lease.original)
+		lease.installed = false
+	end
+	return true
+end
 
 local function correction_context(data)
 	data = data or {}
@@ -880,6 +1061,15 @@ local function call_schedule_original(...)
 	return result
 end
 
+local function call_dialog_original(...)
+	Hooks.dialog_in_call = true
+	local original = Hooks.dialog_original
+	local result = { pcall(original, ...) }
+	Hooks.dialog_in_call = false
+	if result[1] ~= true then error(result[2]) end
+	return table.unpack(result, 2)
+end
+
 function RestoreModDetails.CancelWorkers()
 	for thread in pairs(Hooks.workers) do
 		DeleteThread(thread)
@@ -927,6 +1117,8 @@ local function worker_finished(ok, report, failure)
 			mod_id = report.mod_id,
 			description = report.description == true,
 			thumbnail = report.thumbnail == true,
+			screenshots = report.screenshots == true,
+			screenshot_count = report.screenshot_count,
 		}))
 	end
 end
@@ -946,6 +1138,31 @@ local function hide_stale_thumbnail(mod)
 		pending = true,
 	}
 	Hooks.modified[mod] = record
+end
+
+local function capture_screenshot_urls(mod)
+	if type(mod) ~= "table" then return end
+	local record = Hooks.modified[mod] or {}
+	local previous = record.screenshot_urls
+	local current = rawget(mod, SCREENSHOT_URLS_FIELD)
+	local original = current
+	if previous and (current == previous.installed or previous.pending == true) then
+		original = previous.original
+	end
+	record.screenshot_urls = {
+		original = original,
+		installed = nil,
+		pending = true,
+	}
+	Hooks.modified[mod] = record
+end
+
+local function finish_screenshot_urls(mod)
+	local record = type(mod) == "table" and Hooks.modified[mod]
+	local field = record and record.screenshot_urls
+	if not field or field.pending ~= true then return end
+	field.installed = rawget(mod, SCREENSHOT_URLS_FIELD)
+	field.pending = nil
 end
 
 function RestoreModDetails.CorrectedEntryUpdate(mod, ...)
@@ -974,6 +1191,7 @@ Hooks.entry_update_impl = RestoreModDetails.CorrectedEntryUpdate
 function RestoreModDetails.Corrected(mod, ...)
 	RestoreModDetails.CancelDetailWorker()
 	begin_notification_gate(mod)
+	capture_screenshot_urls(mod)
 	local generation = Hooks.generation
 	local result = { call_retrieve_original(mod, ...) }
 	local vanilla_thread = rawget(_G, "g_PopsRetrieveModDetailsThread")
@@ -983,6 +1201,7 @@ function RestoreModDetails.Corrected(mod, ...)
 		local thread = create_thread(function(target, wait_for, token)
 			local ok, report, failure = pcall(Hooks.worker_fn, target, Hooks,
 				wait_for, token, true, false)
+			finish_screenshot_urls(target)
 			release_notification_gate(target, true, true)
 			worker_finished(ok, report, failure)
 		end, mod, vanilla_thread, generation)
@@ -996,6 +1215,31 @@ function RestoreModDetails.Corrected(mod, ...)
 end
 
 Hooks.impl = RestoreModDetails.Corrected
+
+-- The vanilla screenshot strip is conditional at template-spawn time. Prepare
+-- current images before entering details so that the existing strip, including
+-- its click-to-select behavior, is created in its normal place below the hero.
+function RestoreModDetails.CorrectedDialogMode(win, mode, mode_param, ...)
+	if mode == "details" and Hooks.enabled == true and compile_runtime() == true then
+		local mod = type(mode_param) == "table" and
+			(mode_param.ModEntry or mode_param) or nil
+		local is_realtime = rawget(_G, "IsRealTimeThread")
+		if type(mod) == "table" and type(is_realtime) == "function" and
+			is_realtime() then
+			local ok, report, failure = pcall(Hooks.worker_fn, mod, Hooks,
+				false, Hooks.generation, true, true)
+			if ok ~= true or failure then
+				log("ERROR", "Could not prepare mod screenshots before opening details", {
+					error = ok == true and failure or report,
+					mod_id = type(mod.PdxModId) == "function" and mod:PdxModId(),
+				})
+			end
+		end
+	end
+	return call_dialog_original(win, mode, mode_param, ...)
+end
+
+Hooks.dialog_impl = RestoreModDetails.CorrectedDialogMode
 
 -- Queue vanilla's normal thumbnail/screenshots work. If an entry-update path
 -- could not synchronously install the current thumbnail, wait for a tracked
@@ -1033,7 +1277,17 @@ function RestoreModDetails.CorrectedDownload(mod, ...)
 	local record = mod and Hooks.modified[mod]
 	local thumbnail = record and record.thumbnail
 	local owned_at_entry = thumbnail and mod.Thumbnail == thumbnail.installed
+	-- Fix 016 downloads current screenshots itself. Hide the URL list only for
+	-- the captured vanilla call so its broken AsyncPopsDownloadFile branch cannot
+	-- overwrite the ready selector or abort the shared download queue.
+	local screenshot_urls = type(mod) == "table" and
+		rawget(mod, SCREENSHOT_URLS_FIELD) or nil
+	if screenshot_urls ~= nil then rawset(mod, SCREENSHOT_URLS_FIELD, nil) end
 	local result = call_download_original(mod, ...)
+	if screenshot_urls ~= nil and type(mod) == "table" and
+		rawget(mod, SCREENSHOT_URLS_FIELD) == nil then
+		rawset(mod, SCREENSHOT_URLS_FIELD, screenshot_urls)
+	end
 	if result[1] == true and Hooks.enabled == true and owned_at_entry then
 		local latest = Hooks.modified[mod]
 		latest = latest and latest.thumbnail
@@ -1073,6 +1327,18 @@ function RestoreModDetails.RestoreModifiedEntries(reason)
 				mod.Thumbnail = record.thumbnail.original
 				restored = true
 			end
+			if record.screenshots and
+				mod.ScreenshotPaths == record.screenshots.installed then
+				mod.ScreenshotPaths = record.screenshots.original
+				restored = true
+			end
+			if record.screenshot_urls and
+				rawget(mod, SCREENSHOT_URLS_FIELD) ==
+					record.screenshot_urls.installed then
+				rawset(mod, SCREENSHOT_URLS_FIELD,
+					record.screenshot_urls.original)
+				restored = true
+			end
 			if restored and type(mod.ObjModified) == "function" then mod:ObjModified() end
 			return restored
 		end)
@@ -1095,6 +1361,11 @@ function RestoreModDetails.CleanupOwnedFiles(reason)
 	local protected = {}
 	for _, record in pairs(Hooks.modified) do
 		if record.thumbnail then protected[record.thumbnail.installed] = true end
+		if record.screenshots then
+			for _, path in ipairs(record.screenshots.installed or empty_table) do
+				protected[path] = true
+			end
+		end
 	end
 	local candidates = {}
 	for path in pairs(Hooks.owned_paths) do
@@ -1103,7 +1374,7 @@ function RestoreModDetails.CleanupOwnedFiles(reason)
 	if next(candidates) == nil then return false end
 	local ok, failed = pcall(Hooks.cleanup_fn, candidates)
 	if ok ~= true or type(failed) ~= "table" then
-		log("ERROR", "Could not clean up fix-owned thumbnail files", {
+		log("ERROR", "Could not clean up fix-owned image files", {
 			error = ok == true and "invalid cleanup result" or failed,
 			reason = reason,
 		})
@@ -1113,7 +1384,7 @@ function RestoreModDetails.CleanupOwnedFiles(reason)
 		if failed[path] == nil then Hooks.owned_paths[path] = nil end
 	end
 	if next(failed) ~= nil then
-		log("ERROR", "Some fix-owned thumbnail files could not be removed", {
+		log("ERROR", "Some fix-owned image files could not be removed", {
 			files = failed,
 			reason = reason,
 		})
@@ -1126,25 +1397,36 @@ function RestoreModDetails.InstallHook(reason)
 	local current_fn = rawget(_G, RETRIEVE_FN)
 	local current_download_fn = rawget(_G, DOWNLOAD_FN)
 	local current_schedule_fn = rawget(_G, SCHEDULE_FN)
+	local current_dialog_fn = rawget(_G, DIALOG_MODE_FN)
 	local current_entry_class = rawget(_G, "ModUI_Entry")
 	local current_entry_update_fn = type(current_entry_class) == "table" and
 		current_entry_class[ENTRY_UPDATE_METHOD]
 	if type(current_fn) ~= "function" or type(current_download_fn) ~= "function" or
 		type(current_schedule_fn) ~= "function" or
+		type(current_dialog_fn) ~= "function" or
 		type(current_entry_update_fn) ~= "function" then
 		log("ERROR", "Required v1.0.7 API is unavailable; fix not installed", {
 			fn = RETRIEVE_FN,
 			download_fn = DOWNLOAD_FN,
 			schedule_fn = SCHEDULE_FN,
+			dialog_fn = DIALOG_MODE_FN,
 			entry_update = ENTRY_UPDATE_METHOD,
 			reason = reason,
 		})
 		return false
 	end
-	if compile_runtime() ~= true then return false end
-	if RestoreModDetails.InstallFallbackFonts() ~= true then return false end
+	if RestoreModDetails.AcquireScreenshotField(reason) ~= true then return false end
+	if compile_runtime() ~= true then
+		RestoreModDetails.ReleaseScreenshotField("compile_failed")
+		return false
+	end
+	if RestoreModDetails.InstallFallbackFonts() ~= true then
+		RestoreModDetails.ReleaseScreenshotField("font_install_failed")
+		return false
+	end
 	if RestoreModDetails.InstallBoldStyle() ~= true then
 		RestoreModDetails.RestoreFallbackFonts("style_install_failed")
+		RestoreModDetails.ReleaseScreenshotField("style_install_failed")
 		return false
 	end
 	if current_fn ~= Hooks.original and current_fn ~= Hooks.wrapper then
@@ -1161,6 +1443,11 @@ function RestoreModDetails.InstallHook(reason)
 		Hooks.schedule_original = current_schedule_fn
 		Hooks.schedule_original_may_contain_wrapper = true
 	end
+	if current_dialog_fn ~= Hooks.dialog_original and
+		current_dialog_fn ~= Hooks.dialog_wrapper then
+		Hooks.dialog_original = current_dialog_fn
+		Hooks.dialog_original_may_contain_wrapper = true
+	end
 	if current_entry_update_fn ~= Hooks.entry_update_original and
 		current_entry_update_fn ~= Hooks.entry_update_wrapper then
 		Hooks.entry_update_original = current_entry_update_fn
@@ -1170,6 +1457,7 @@ function RestoreModDetails.InstallHook(reason)
 	ModsUIRetrieveModDetails = Hooks.wrapper
 	WaitDownloadModScreenshots = Hooks.download_wrapper
 	ModsUIDownloadScreenshots = Hooks.schedule_wrapper
+	ModsUISetDialogMode = Hooks.dialog_wrapper
 	current_entry_class[ENTRY_UPDATE_METHOD] = Hooks.entry_update_wrapper
 	RestoreModDetails.enabled = true
 	Hooks.enabled = true
@@ -1207,6 +1495,9 @@ function RestoreModDetails.RestoreHook(reason)
 	if rawget(_G, SCHEDULE_FN) == Hooks.schedule_wrapper then
 		ModsUIDownloadScreenshots = Hooks.schedule_original
 	end
+	if rawget(_G, DIALOG_MODE_FN) == Hooks.dialog_wrapper then
+		ModsUISetDialogMode = Hooks.dialog_original
+	end
 	local current_entry_class = rawget(_G, "ModUI_Entry")
 	if type(current_entry_class) == "table" and
 		current_entry_class[ENTRY_UPDATE_METHOD] == Hooks.entry_update_wrapper then
@@ -1214,8 +1505,10 @@ function RestoreModDetails.RestoreHook(reason)
 	end
 	local style_ok = RestoreModDetails.RestoreBoldStyle(reason)
 	local fallback_ok = RestoreModDetails.RestoreFallbackFonts(reason)
+	local screenshot_field_ok = RestoreModDetails.ReleaseScreenshotField(reason)
 	log("INFO", "Restored captured mod-detail function and state", { reason = reason })
-	return fields_ok and gates_ok and files_ok and style_ok and fallback_ok
+	return fields_ok and gates_ok and files_ok and style_ok and fallback_ok and
+		screenshot_field_ok
 end
 
 function RestoreModDetails.SetEnabled(enabled, reason)
