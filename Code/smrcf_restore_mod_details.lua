@@ -37,6 +37,7 @@ local FIX = {
 
 local RETRIEVE_FN = "ModsUIRetrieveModDetails"
 local DOWNLOAD_FN = "WaitDownloadModScreenshots"
+local SCHEDULE_FN = "ModsUIDownloadScreenshots"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
 
 -- Runs in the game environment, not this mod's restricted environment.
@@ -258,7 +259,12 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 			hooks.modified[mod] = record
 			report.changed = true
 			report.thumbnail = true
-			mod:ObjModified()
+			local notify = rawget(_G, "Msg")
+			if type(notify) == "function" then
+				notify("PdxModsThumbnailDownloaded", mod)
+			else
+				mod:ObjModified()
+			end
 		end
 	end
 
@@ -328,6 +334,9 @@ else
 		download_original = rawget(_G, DOWNLOAD_FN),
 		download_wrapper = false,
 		download_in_call = false,
+		schedule_original = rawget(_G, SCHEDULE_FN),
+		schedule_wrapper = false,
+		schedule_in_call = false,
 		workers = {},
 		modified = setmetatable({}, { __mode = "k" }),
 		owned_paths = {},
@@ -341,6 +350,7 @@ Hooks.workers = Hooks.workers or {}
 Hooks.modified = Hooks.modified or setmetatable({}, { __mode = "k" })
 Hooks.owned_paths = Hooks.owned_paths or {}
 Hooks.download_original = Hooks.download_original or rawget(_G, DOWNLOAD_FN)
+Hooks.schedule_original = Hooks.schedule_original or rawget(_G, SCHEDULE_FN)
 Hooks.bold_style_id = BOLD_STYLE_ID
 
 local current = rawget(_G, RETRIEVE_FN)
@@ -358,6 +368,15 @@ if current_download ~= Hooks.download_wrapper and type(current_download) == "fun
 	Hooks.download_original = current_download
 end
 Hooks.download_base_original = Hooks.download_base_original or Hooks.download_original
+
+local current_schedule = rawget(_G, SCHEDULE_FN)
+if current_schedule ~= Hooks.schedule_wrapper and type(current_schedule) == "function" then
+	if current_schedule ~= Hooks.schedule_original then
+		Hooks.schedule_original_may_contain_wrapper = true
+	end
+	Hooks.schedule_original = current_schedule
+end
+Hooks.schedule_base_original = Hooks.schedule_base_original or Hooks.schedule_original
 
 if type(Hooks.wrapper) ~= "function" then
 	Hooks.wrapper = function(...)
@@ -381,6 +400,18 @@ if type(Hooks.download_wrapper) ~= "function" then
 			return Hooks.download_base_original(...)
 		end
 		return Hooks.download_original(...)
+	end
+end
+if type(Hooks.schedule_wrapper) ~= "function" then
+	Hooks.schedule_wrapper = function(...)
+		if Hooks.schedule_in_call == true then return Hooks.schedule_base_original(...) end
+		if Hooks.enabled == true and type(Hooks.schedule_impl) == "function" then
+			return Hooks.schedule_impl(...)
+		end
+		if Hooks.schedule_original_may_contain_wrapper == true then
+			return Hooks.schedule_base_original(...)
+		end
+		return Hooks.schedule_original(...)
 	end
 end
 if type(shared) == "table" then shared.SMRCF_ModDetailsHooks = Hooks end
@@ -455,16 +486,19 @@ function RestoreModDetails.InstallBoldStyle()
 	local owned = text_style:new({
 		id = BOLD_STYLE_ID,
 		group = "ModsUI",
-		FontName = "Droid Sans Bold",
+		FontName = base and base.FontName or "Noto Sans Regular",
 		FontSize = base and base.FontSize or 26,
 		TextColor = base and base.TextColor or RGB(26, 26, 26),
 		RolloverTextColor = base and base.RolloverTextColor or RGB(26, 26, 26),
 		DisabledTextColor = base and base.DisabledTextColor or RGB(26, 26, 26),
 		DisabledRolloverTextColor = base and base.DisabledRolloverTextColor or RGB(26, 26, 26),
-		ShadowType = base and base.ShadowType or "shadow",
-		ShadowSize = base and base.ShadowSize or 0,
-		ShadowColor = base and base.ShadowColor or 0,
-		ShadowDir = base and base.ShadowDir or point(1, 1),
+		-- Relaunched ships no bold face for its Noto UI font. A one-pixel
+		-- same-color outline preserves Noto's metrics and produces real visible
+		-- emphasis instead of silently falling back to the regular face.
+		ShadowType = "outline",
+		ShadowSize = 1,
+		ShadowColor = base and base.TextColor or RGB(26, 26, 26),
+		ShadowDir = point(0, 0),
 	})
 	Hooks.bold_style = owned
 	styles[BOLD_STYLE_ID] = owned
@@ -498,6 +532,14 @@ local function call_download_original(...)
 	local original = Hooks.download_original
 	local result = { pcall(original, ...) }
 	Hooks.download_in_call = false
+	return result
+end
+
+local function call_schedule_original(...)
+	Hooks.schedule_in_call = true
+	local original = Hooks.schedule_original
+	local result = { pcall(original, ...) }
+	Hooks.schedule_in_call = false
 	return result
 end
 
@@ -565,13 +607,48 @@ end
 
 Hooks.impl = RestoreModDetails.Corrected
 
--- Browse All and Installed Mods both pass through this queue. Let vanilla finish
--- its thumbnail and screenshot work, then fetch current full details and install
--- a fresh thumbnail. Waiting for the owned worker preserves the queue's serial
--- file behavior, while disable can still cancel just the fix-owned worker.
-function RestoreModDetails.CorrectedDownload(mod, ...)
-	local result = call_download_original(mod, ...)
+-- The list loader calls this before it redraws a newly materialized Browse All
+-- or Installed Mods entry. Queue vanilla's normal thumbnail/screenshots first,
+-- then synchronously wait for a tracked current-thumbnail worker. The entry's
+-- very first populated render therefore has the current image instead of the
+-- version-keyed cache image.
+function RestoreModDetails.CorrectedSchedule(mod, ...)
+	local result = call_schedule_original(mod, ...)
 	if result[1] == true and Hooks.enabled == true and mod ~= nil and
+		type(rawget(_G, "CreateRealTimeThread")) == "function" and
+		compile_runtime() == true then
+		local generation = Hooks.generation
+		local thread = CreateRealTimeThread(function(target, token)
+			local ok, report, failure = pcall(Hooks.worker_fn, target, Hooks,
+				false, token, false, true)
+			worker_finished(ok, report, failure)
+		end, mod, generation)
+		Hooks.workers[thread] = true
+		WaitThread(thread)
+	end
+	if result[1] ~= true then error(result[2]) end
+	return table.unpack(result, 2)
+end
+
+Hooks.schedule_impl = RestoreModDetails.CorrectedSchedule
+
+-- Browse All and Installed Mods both pass through this queue. Let vanilla finish
+-- its thumbnail and screenshot work. If the initial-list worker already owns a
+-- current thumbnail, restore that exact path after vanilla replaces it with the
+-- stale cache. Calls from any other path still fetch a current full response.
+function RestoreModDetails.CorrectedDownload(mod, ...)
+	local record = mod and Hooks.modified[mod]
+	local thumbnail = record and record.thumbnail
+	local owned_at_entry = thumbnail and mod.Thumbnail == thumbnail.installed
+	local result = call_download_original(mod, ...)
+	if result[1] == true and Hooks.enabled == true and owned_at_entry then
+		local latest = Hooks.modified[mod]
+		latest = latest and latest.thumbnail
+		if latest and mod.Thumbnail ~= latest.installed then
+			mod.Thumbnail = latest.installed
+			if type(mod.ObjModified) == "function" then mod:ObjModified() end
+		end
+	elseif result[1] == true and Hooks.enabled == true and mod ~= nil and
 		type(rawget(_G, "CreateRealTimeThread")) == "function" and
 		compile_runtime() == true then
 		local generation = Hooks.generation
@@ -654,10 +731,13 @@ end
 function RestoreModDetails.InstallHook(reason)
 	local current_fn = rawget(_G, RETRIEVE_FN)
 	local current_download_fn = rawget(_G, DOWNLOAD_FN)
-	if type(current_fn) ~= "function" or type(current_download_fn) ~= "function" then
+	local current_schedule_fn = rawget(_G, SCHEDULE_FN)
+	if type(current_fn) ~= "function" or type(current_download_fn) ~= "function" or
+		type(current_schedule_fn) ~= "function" then
 		log("ERROR", "Required v1.0.7 API is unavailable; fix not installed", {
 			fn = RETRIEVE_FN,
 			download_fn = DOWNLOAD_FN,
+			schedule_fn = SCHEDULE_FN,
 			reason = reason,
 		})
 		return false
@@ -673,10 +753,30 @@ function RestoreModDetails.InstallHook(reason)
 		Hooks.download_original = current_download_fn
 		Hooks.download_original_may_contain_wrapper = true
 	end
+	if current_schedule_fn ~= Hooks.schedule_original and
+		current_schedule_fn ~= Hooks.schedule_wrapper then
+		Hooks.schedule_original = current_schedule_fn
+		Hooks.schedule_original_may_contain_wrapper = true
+	end
+	local was_enabled = Hooks.enabled == true
 	ModsUIRetrieveModDetails = Hooks.wrapper
 	WaitDownloadModScreenshots = Hooks.download_wrapper
+	ModsUIDownloadScreenshots = Hooks.schedule_wrapper
 	RestoreModDetails.enabled = true
 	Hooks.enabled = true
+	if not was_enabled then
+		local context = rawget(_G, "g_ParadoxModsContextObj")
+		if type(context) == "table" then
+			if type(context.GetMods) == "function" then
+				local ok, failure = pcall(context.GetMods, context)
+				if not ok then log("ERROR", "Could not reload Browse All", { error = failure }) end
+			end
+			if type(context.GetInstalledMods) == "function" then
+				local ok, failure = pcall(context.GetInstalledMods, context)
+				if not ok then log("ERROR", "Could not reload Installed Mods", { error = failure }) end
+			end
+		end
+	end
 	log("INFO", "Installed mod-detail hook", { reason = reason })
 	return true
 end
@@ -693,6 +793,9 @@ function RestoreModDetails.RestoreHook(reason)
 	end
 	if rawget(_G, DOWNLOAD_FN) == Hooks.download_wrapper then
 		WaitDownloadModScreenshots = Hooks.download_original
+	end
+	if rawget(_G, SCHEDULE_FN) == Hooks.schedule_wrapper then
+		ModsUIDownloadScreenshots = Hooks.schedule_original
 	end
 	local style_ok = RestoreModDetails.RestoreBoldStyle(reason)
 	log("INFO", "Restored captured mod-detail function and state", { reason = reason })

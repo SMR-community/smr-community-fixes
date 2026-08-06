@@ -528,12 +528,13 @@ When enabled, Restore Mod Details must:
 1. Remain one fix for both symptoms: call the captured
    `ModsUIRetrieveModDetails` first, then post-process only the selected mod
    after vanilla's detail-retrieval thread finishes. It must also wrap the
-   captured `WaitDownloadModScreenshots`, let vanilla finish first, then fetch
-   current full details and refresh thumbnails in Browse All and Installed Mods.
+   captured `ModsUIDownloadScreenshots` and `WaitDownloadModScreenshots` so it
+   fetches current full details before a newly loaded Browse All or Installed
+   Mods entry first renders, while preserving vanilla's queued work.
 2. Parse `PdxModDetails.LongDescription` with a private parser instance that
-   retains headings, uses a fix-owned true-bold text style, separates paragraphs
-   and lists like the website, spaces and indents bullets/numbers, preserves the
-   contents of common rich-text tags, and emits clickable `OpenUrl` markup only
+   retains headings, uses a fix-owned visibly bold Noto text style, separates
+   paragraphs and lists like the website, spaces and indents bullets/numbers,
+   preserves common rich-text tags, and emits clickable `OpenUrl` markup only
    for safe HTTP/HTTPS anchors. It must not change the global `HTMLParser` class.
 3. Download the current full response's `DisplayImagePath` for detail and list
    entries with cache-revalidation headers into a unique fix-owned file, without
@@ -543,8 +544,8 @@ When enabled, Restore Mod Details must:
    worker, file, and text style it changes. Disabling or quiescing must first
    close the gate and cancel its workers, restore a field only while it still
    equals this fix's installed value, refresh restored entries, delete only
-   fix-owned files, and
-   restore each exact captured function only while the fix still owns its global.
+   fix-owned files, and restore each exact captured function only while the fix
+   still owns its global.
    A later third-party field value, text style, or wrapper must be preserved.
 5. Remain idempotent across repeated enable/disable and Lua reload, keep no saved
    object or marker, default disabled, and emit one timed `Bug fix invoked:`
@@ -810,8 +811,9 @@ the engine's item-selection translation assertion.
       unchanged, restores the exact captured function when disabled, and emits
       one timed correction event for each altered delayed transition.
 - [ ] Restore Mod Details refreshes thumbnails in Browse All, Installed Mods,
-      and the selected mod from current full-detail responses; renders true bold
-      text, website-style paragraph/list spacing, and clickable HTTP/HTTPS links;
+      and the selected mod from current full-detail responses before their first
+      populated render; renders visibly bold text, website-style paragraph/list
+      spacing, and clickable HTTP/HTTPS links;
       and does not alter the vanilla cache or global HTML parser. Disabling during
       and after retrieval cancels its work, restores only fields, styles, and
       wrappers it still owns, deletes every file it created, preserves later
@@ -996,7 +998,8 @@ the engine's item-selection translation assertion.
 38. Enable Restore Mod Details and view Browse All, Installed Mods, and a mod
     whose thumbnail was replaced without a version bump and whose description
     contains headings, bold or italic text, lists, and HTTP/HTTPS links. Confirm
-    the current thumbnail is downloaded in all three views and true bold text,
+    the current thumbnail is visible on the first populated render in all three
+    views and bold text is visibly heavier than surrounding regular text,
     separated paragraphs, indented/spaced lists, and clickable links render on
     the detail page.
     While another retrieval is active, disable the fix and confirm the worker
