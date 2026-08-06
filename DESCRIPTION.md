@@ -531,19 +531,20 @@ When enabled, Restore Mod Details must:
    captured `ModsUIDownloadScreenshots` and `WaitDownloadModScreenshots` so it
    fetches current full details before a newly loaded Browse All or Installed
    Mods entry first renders, while preserving vanilla's queued work.
-2. Parse `PdxModDetails.LongDescription` with a private parser instance that
-   retains headings, renders the entire description at 20 points, uses a
-   fix-owned visibly bold Noto text style, separates paragraphs and lists like
-   the website, spaces and indents bullets/numbers,
-   preserves common rich-text tags, and emits clickable `OpenUrl` markup only
-   for safe HTTP/HTTPS anchors. It must not change the global `HTMLParser` class.
+2. Detect HTML or Steam BBCode descriptions and parse them with private parser
+   instances. Retain headings, bold/italic/underline text, lists, quotes, code,
+   separators, and safe HTTP/HTTPS links; decode numeric Unicode entities; wrap
+   output in the engine's fallback-font mode; and render the entire description
+   at 20 points with a fix-owned visibly bold Noto style. It must not change the
+   global `HTMLParser` or `SteamParser` classes.
 3. Download the current full response's `DisplayImagePath` for detail and list
    entries with cache-revalidation headers into a unique fix-owned file, without
    deleting or overwriting the vanilla screenshot/thumbnail cache, then refresh
    the visible UI with `ModUI_Entry:ObjModified()`.
 4. Keep reload-safe ownership records for every `LongDescription`, `Thumbnail`,
-   worker, file, and text style it changes. Disabling or quiescing must first
-   close the gate and cancel its workers, restore a field only while it still
+   worker, file, text style, and fallback-font list it changes. Disabling or
+   quiescing must first close the gate and cancel its workers, restore a field
+   only while it still
    equals this fix's installed value, refresh restored entries, delete only
    fix-owned files, and restore each exact captured function only while the fix
    still owns its global.
@@ -813,9 +814,10 @@ the engine's item-selection translation assertion.
       one timed correction event for each altered delayed transition.
 - [ ] Restore Mod Details refreshes thumbnails in Browse All, Installed Mods,
       and the selected mod from current full-detail responses before their first
-      populated render; renders the description at 20 points with visibly bold
-      text, website-style paragraph/list spacing, and clickable HTTP/HTTPS links;
-      and does not alter the vanilla cache or global HTML parser. Disabling during
+      populated render; renders HTML and Steam BBCode at 20 points with visibly
+      bold text, Unicode arrows/symbols/emoji, website-style paragraph/list
+      spacing, and clickable HTTP/HTTPS links; and does not alter the vanilla
+      cache or global parser classes. Disabling during
       and after retrieval cancels its work, restores only fields, styles, and
       wrappers it still owns, deletes every file it created, preserves later
       third-party changes, and refreshes visible entries.
@@ -998,7 +1000,8 @@ the engine's item-selection translation assertion.
     restored and no correction event is emitted on the next transition.
 38. Enable Restore Mod Details and view Browse All, Installed Mods, and a mod
     whose thumbnail was replaced without a version bump and whose description
-    contains headings, bold or italic text, lists, and HTTP/HTTPS links. Confirm
+    contains HTML or Steam headings, bold or italic text, lists, Unicode arrows,
+    numeric emoji entities, and HTTP/HTTPS links. Confirm
     the current thumbnail is visible on the first populated render in all three
     views and bold text is visibly heavier than surrounding regular text,
     separated paragraphs, indented/spaced lists, and clickable links render on

@@ -32,7 +32,7 @@ local FIX = {
 	default_enabled = false,
 	debug = false,
 	label = "Restore Mod Details",
-	description = "Loads current thumbnails throughout the Paradox Mods browser and restores website-style description formatting with clickable links.",
+	description = "Loads current thumbnails throughout the Paradox Mods browser and restores HTML/Steam formatting, Unicode symbols, emoji, and clickable links.",
 }
 
 local RETRIEVE_FN = "ModsUIRetrieveModDetails"
@@ -40,6 +40,7 @@ local DOWNLOAD_FN = "WaitDownloadModScreenshots"
 local SCHEDULE_FN = "ModsUIDownloadScreenshots"
 local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
+local FALLBACK_FONT_NAMES = { "Segoe UI Emoji", "Segoe UI Symbol" }
 
 -- Runs in the game environment, not this mod's restricted environment.
 local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
@@ -73,6 +74,123 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 	local failures = {}
 
 	local function format_description(input)
+		local function encode_utf8(codepoint)
+			if not codepoint or codepoint < 0 or codepoint > 0x10ffff or
+				(codepoint >= 0xd800 and codepoint <= 0xdfff) then
+				return nil
+			end
+			if codepoint <= 0x7f then return string.char(codepoint) end
+			if codepoint <= 0x7ff then
+				return string.char(0xc0 + math.floor(codepoint / 0x40),
+					0x80 + codepoint % 0x40)
+			end
+			if codepoint <= 0xffff then
+				return string.char(0xe0 + math.floor(codepoint / 0x1000),
+					0x80 + math.floor(codepoint / 0x40) % 0x40,
+					0x80 + codepoint % 0x40)
+			end
+			return string.char(0xf0 + math.floor(codepoint / 0x40000),
+				0x80 + math.floor(codepoint / 0x1000) % 0x40,
+				0x80 + math.floor(codepoint / 0x40) % 0x40,
+				0x80 + codepoint % 0x40)
+		end
+
+		local function decode_numeric_entities(text)
+			text = text:gsub("&#[xX]([%x]+);", function(hex)
+				return encode_utf8(tonumber(hex, 16)) or ("&#x" .. hex .. ";")
+			end)
+			return text:gsub("&#([%d]+);", function(decimal)
+				return encode_utf8(tonumber(decimal, 10)) or ("&#" .. decimal .. ";")
+			end)
+		end
+
+		input = decode_numeric_entities(tostring(input or ""))
+		local known_steam_tags = {
+			b = true, i = true, u = true, s = true, strike = true,
+			h1 = true, h2 = true, h3 = true, list = true, olist = true,
+			url = true, quote = true, code = true, noparse = true,
+			hr = true, img = true, table = true, tr = true, th = true, td = true,
+		}
+		input = input:gsub("%[(/?)([%a%d]+)([^%]]*)%]", function(slash, name, rest)
+			local lower = string.lower(name)
+			if known_steam_tags[lower] then
+				return "[" .. slash .. lower .. rest .. "]"
+			end
+		end)
+		input = input:gsub("%[s%]", "[strike]"):gsub("%[/s%]", "[/strike]")
+		input = input:gsub("%[url%](https?://.-)%[/url%]", function(link)
+			return "[url=" .. link .. "]" .. link .. "[/url]"
+		end)
+		local is_steam = input:match("%[/?[bui]%]") or
+			input:match("%[/?h[123]%]") or input:match("%[/?list%]") or
+			input:match("%[/?olist%]") or input:match("%[url=") or
+			input:match("%[/?quote[^%]]*%]") or input:match("%[/?strike%]") or
+			input:match("%[/?code%]") or input:match("%[/?table%]") or
+			input:match("%[hr%]") or input:match("%[%*%]")
+
+		if is_steam and type(SteamParser) == "table" then
+			local h1_open, h1_close = "\3SMRCF_H1_OPEN\4", "\3SMRCF_H1_CLOSE\4"
+			local h2_open, h2_close = "\3SMRCF_H2_OPEN\4", "\3SMRCF_H2_CLOSE\4"
+			local h3_open, h3_close = "\3SMRCF_H3_OPEN\4", "\3SMRCF_H3_CLOSE\4"
+			local bullet_mark = "\3SMRCF_BULLET\4"
+			local number_mark = "\3SMRCF_NUMBER_"
+			input = input:gsub("%[h1%]", "\n\n" .. h1_open)
+				:gsub("%[/h1%]", h1_close .. "\n\n")
+				:gsub("%[h2%]", "\n\n" .. h2_open)
+				:gsub("%[/h2%]", h2_close .. "\n\n")
+				:gsub("%[h3%]", "\n\n" .. h3_open)
+				:gsub("%[/h3%]", h3_close .. "\n\n")
+			input = input:gsub("%[olist%](.-)%[/olist%]", function(list)
+				local count = 0
+				list = list:gsub("%[%*%]", function()
+					count = count + 1
+					return "\n" .. number_mark .. tostring(count) .. "\4"
+				end)
+				return "\n" .. list .. "\n"
+			end)
+			input = input:gsub("%[/?list%]", "\n")
+				:gsub("%[%*%]", "\n" .. bullet_mark)
+			local steam = SteamParser:new({
+				AllowUrl = true,
+				NormalTextStyle = hooks.body_style_id,
+				BoldTextStyle = hooks.bold_style_id,
+				ItalicTextStyle = hooks.body_style_id,
+				Heading1TextStyle = hooks.bold_style_id,
+				Heading2TextStyle = hooks.bold_style_id,
+				Heading3TextStyle = hooks.bold_style_id,
+				CodeTextStyle = hooks.body_style_id,
+				QuoteTextStyle = hooks.body_style_id,
+				HyperlinkTextStyle = "ModsUIDescriptionLink",
+			})
+			local output = steam:ConvertText(input)
+			output = output:gsub(h1_open, "<scale 1200><style " .. hooks.bold_style_id .. ">")
+				:gsub(h1_close, "</style><scale 1000>")
+				:gsub(h2_open, "<scale 1100><style " .. hooks.bold_style_id .. ">")
+				:gsub(h2_close, "</style><scale 1000>")
+				:gsub(h3_open, "<style " .. hooks.bold_style_id .. ">")
+				:gsub(h3_close, "</style>")
+				:gsub(bullet_mark, "    •  ")
+			output = output:gsub(number_mark .. "(%d+)\4", "    %1.  ")
+			local hyperlink_stack = {}
+			output = output:gsub("<[^>]+>", function(tag)
+				if tag == "</h>" then
+					local safe = table.remove(hyperlink_stack)
+					return safe and "</h>" or ""
+				end
+				if not tag:match("^<h%s+") then return tag end
+				local link = tag:match("^<h%s+(.+)>$") or ""
+				local lower = string.lower(link)
+				local safe = lower:match("^https?://") and not link:find("[<>\"']") and
+					not link:find("[%c]")
+				hyperlink_stack[#hyperlink_stack + 1] = safe == true
+				if not safe then return "" end
+				return "<h OpenUrl " .. link:gsub("%s", "+") .. ">"
+			end)
+			output = output:gsub("\n\n\n+", "\n\n")
+			return "<fallback_font><style " .. hooks.body_style_id .. ">" ..
+				output .. "</style></fallback_font>"
+		end
+
 		local parser = HTMLParser:new({ TextColor = RGB(26, 26, 26) })
 		local base_begin_tag = parser.BeginTag
 		local base_end_tag = parser.EndTag
@@ -178,14 +296,15 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 				original_inner_html, processed_html)
 		end)
 
-		input = tostring(input or ""):gsub("</?br%s*/?>", "<br/>")
+		input = input:gsub("</?br%s*/?>", "<br/>")
 		local output = parser:ConvertText(input)
 		output = output:gsub(paragraph_mark, "\n\n")
 		output = output:gsub(list_open_mark, "\n\n")
 		output = output:gsub(list_close_mark, "\n\n")
 		output = output:gsub(item_mark, "\n")
 		output = output:gsub("\n\n\n+", "\n\n")
-		return "<style " .. hooks.body_style_id .. ">" .. output .. "</style>"
+		return "<fallback_font><style " .. hooks.body_style_id .. ">" ..
+			output .. "</style></fallback_font>"
 	end
 
 	local raw_description = details.LongDescription
@@ -348,6 +467,9 @@ else
 		bold_style_id = BOLD_STYLE_ID,
 		bold_style = false,
 		bold_style_original = nil,
+		fallback_fonts = false,
+		fallback_fonts_original = nil,
+		fallback_fonts_expected = false,
 	}
 end
 Hooks.workers = Hooks.workers or {}
@@ -473,6 +595,53 @@ local function clear_bold_style_cache()
 	end
 end
 
+local function same_array(left, right)
+	if type(left) ~= "table" or type(right) ~= "table" or #left ~= #right then
+		return false
+	end
+	for index = 1, #left do
+		if left[index] ~= right[index] then return false end
+	end
+	return true
+end
+
+function RestoreModDetails.InstallFallbackFonts()
+	local configuration = rawget(_G, "config")
+	local current = type(configuration) == "table" and configuration.FallbackFonts
+	if type(current) ~= "table" then return true end
+	if Hooks.fallback_fonts then
+		if current == Hooks.fallback_fonts and
+			same_array(current, Hooks.fallback_fonts_expected) then
+			return true
+		end
+		-- A later owner changed or replaced the list. Do not overwrite it.
+		return true
+	end
+	local installed = {}
+	for index = 1, #current do installed[#installed + 1] = current[index] end
+	for _, font in ipairs(FALLBACK_FONT_NAMES) do
+		if not table.find(installed, font) then installed[#installed + 1] = font end
+	end
+	Hooks.fallback_fonts_original = current
+	Hooks.fallback_fonts = installed
+	Hooks.fallback_fonts_expected = table.copy(installed)
+	configuration.FallbackFonts = installed
+	return true
+end
+
+function RestoreModDetails.RestoreFallbackFonts(reason)
+	local configuration = rawget(_G, "config")
+	if type(configuration) == "table" and
+		configuration.FallbackFonts == Hooks.fallback_fonts and
+		same_array(configuration.FallbackFonts, Hooks.fallback_fonts_expected) then
+		configuration.FallbackFonts = Hooks.fallback_fonts_original
+	end
+	Hooks.fallback_fonts = false
+	Hooks.fallback_fonts_original = nil
+	Hooks.fallback_fonts_expected = false
+	return true
+end
+
 function RestoreModDetails.InstallBoldStyle()
 	local styles = rawget(_G, "TextStyles")
 	local text_style = rawget(_G, "TextStyle")
@@ -484,16 +653,27 @@ function RestoreModDetails.InstallBoldStyle()
 	local body_current = styles[BODY_STYLE_ID]
 	local bold_current = styles[BOLD_STYLE_ID]
 	if Hooks.body_style and body_current ~= Hooks.body_style then
-		log("ERROR", "A later text style owns the fix's body style id; leaving it unchanged", {
-			style = BODY_STYLE_ID,
-		})
-		return false
+		if body_current == nil then
+			-- LoadTextStyles rebuilt the global map during Mods Reload.
+			Hooks.body_style = false
+			Hooks.body_style_original = nil
+		else
+			log("ERROR", "A later text style owns the fix's body style id; leaving it unchanged", {
+				style = BODY_STYLE_ID,
+			})
+			return false
+		end
 	end
 	if Hooks.bold_style and bold_current ~= Hooks.bold_style then
-		log("ERROR", "A later text style owns the fix's style id; leaving it unchanged", {
-			style = BOLD_STYLE_ID,
-		})
-		return false
+		if bold_current == nil then
+			Hooks.bold_style = false
+			Hooks.bold_style_original = nil
+		else
+			log("ERROR", "A later text style owns the fix's style id; leaving it unchanged", {
+				style = BOLD_STYLE_ID,
+			})
+			return false
+		end
 	end
 	local base = styles.ModsUIDetailsDescription
 	if not Hooks.body_style then
@@ -785,7 +965,11 @@ function RestoreModDetails.InstallHook(reason)
 		return false
 	end
 	if compile_runtime() ~= true then return false end
-	if RestoreModDetails.InstallBoldStyle() ~= true then return false end
+	if RestoreModDetails.InstallFallbackFonts() ~= true then return false end
+	if RestoreModDetails.InstallBoldStyle() ~= true then
+		RestoreModDetails.RestoreFallbackFonts("style_install_failed")
+		return false
+	end
 	if current_fn ~= Hooks.original and current_fn ~= Hooks.wrapper then
 		Hooks.original = current_fn
 		Hooks.original_may_contain_wrapper = true
@@ -840,8 +1024,9 @@ function RestoreModDetails.RestoreHook(reason)
 		ModsUIDownloadScreenshots = Hooks.schedule_original
 	end
 	local style_ok = RestoreModDetails.RestoreBoldStyle(reason)
+	local fallback_ok = RestoreModDetails.RestoreFallbackFonts(reason)
 	log("INFO", "Restored captured mod-detail function and state", { reason = reason })
-	return fields_ok and files_ok and style_ok
+	return fields_ok and files_ok and style_ok and fallback_ok
 end
 
 function RestoreModDetails.SetEnabled(enabled, reason)
