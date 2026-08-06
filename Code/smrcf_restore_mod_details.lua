@@ -7,14 +7,15 @@
 -- OnHyperLink(OpenUrl), so the parser is leaving working UI support unused.
 -- Separately, WaitDownloadModScreenshots caches thumbnails only by ModID and
 -- PreferredVersion. Replacing a thumbnail without publishing a new mod version
--- therefore leaves the old image on disk and the detail page keeps loading it.
+-- therefore leaves the old image on disk in Browse All, Installed Mods, and the
+-- detail page.
 --
--- This fix wraps ModsUIRetrieveModDetails and guards the vanilla thumbnail
--- downloader against overwriting a freshly installed image. Vanilla still
--- fetches and populates every detail first. A fix-owned real-time worker formats the
--- returned LongDescription with a private HTMLParser instance and downloads the
--- current detail response's DisplayImagePath to a unique, fix-owned AppData
--- file. It never edits the vanilla screenshot cache.
+-- This fix wraps ModsUIRetrieveModDetails and the vanilla thumbnail downloader.
+-- Vanilla still performs all of its normal work first. Fix-owned real-time
+-- workers format the returned LongDescription with a private HTMLParser instance
+-- and download the latest DisplayImagePath to unique, fix-owned AppData files.
+-- List entries without a full response fetch it without storing it on the entry.
+-- The vanilla screenshot cache is never edited.
 --
 -- AsyncWebRequest and the file APIs are unavailable in a mod environment. The
 -- worker is compiled through LuaCodeToTuple without an env argument, matching
@@ -31,14 +32,16 @@ local FIX = {
 	default_enabled = false,
 	debug = false,
 	label = "Restore Mod Details",
-	description = "Loads each mod's current thumbnail and preserves rich description formatting with clickable links in the Paradox Mods browser.",
+	description = "Loads current thumbnails throughout the Paradox Mods browser and restores website-style description formatting with clickable links.",
 }
 
 local RETRIEVE_FN = "ModsUIRetrieveModDetails"
 local DOWNLOAD_FN = "WaitDownloadModScreenshots"
+local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
 
 -- Runs in the game environment, not this mod's restricted environment.
-local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation)
+local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
+	format_long_description, fetch_current_details)
 	if vanilla_thread and IsValidThread(vanilla_thread) then
 		WaitThread(vanilla_thread)
 	end
@@ -47,8 +50,16 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation)
 	end
 
 	local details = mod and mod.PdxModDetails
+	local detail_error
+	if mod and fetch_current_details == true then
+		local mod_id = type(mod.PdxModId) == "function" and mod:PdxModId()
+		if mod_id then
+			detail_error, details = AsyncPdxGetModDetails({ ModID = mod_id })
+		end
+	end
 	if type(details) ~= "table" then
-		return { changed = false }
+		return { changed = false }, detail_error and
+			("current details: " .. tostring(detail_error)) or nil
 	end
 
 	local report = {
@@ -61,7 +72,12 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation)
 
 	local function format_description(input)
 		local parser = HTMLParser:new({ TextColor = RGB(26, 26, 26) })
+		local base_begin_tag = parser.BeginTag
 		local base_end_tag = parser.EndTag
+		local paragraph_mark = "\1SMRCF_PARAGRAPH\2"
+		local list_open_mark = "\1SMRCF_LIST_OPEN\2"
+		local list_close_mark = "\1SMRCF_LIST_CLOSE\2"
+		local item_mark = "\1SMRCF_LIST_ITEM\2"
 		local passthrough = {
 			DIV = true, SPAN = true, SECTION = true, ARTICLE = true,
 			MAIN = true, HEADER = true, FOOTER = true, FIGURE = true,
@@ -76,6 +92,29 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation)
 			DL = true, DT = true, DD = true, TABLE = true, TR = true,
 			BLOCKQUOTE = true, PRE = true,
 		}
+		rawset(parser, "smrcf_lists", {})
+
+		rawset(parser, "BeginTag", function(self, tag, attributes)
+			tag = tag or ""
+			if tag == "UL" or tag == "OL" then
+				local lists = self.smrcf_lists
+				lists[#lists + 1] = { ordered = tag == "OL", count = 0 }
+				return { smrcf_list = true }
+			end
+			if tag == "LI" then
+				local lists = self.smrcf_lists
+				local list = lists[#lists]
+				if list then
+					list.count = list.count + 1
+					return {
+						smrcf_item = true,
+						depth = #lists,
+						prefix = list.ordered and (tostring(list.count) .. ".") or "•",
+					}
+				end
+			end
+			return base_begin_tag(self, tag, attributes)
+		end)
 
 		rawset(parser, "EndTag", function(self, tag, attributes, state,
 			original_inner_html, processed_html)
@@ -99,8 +138,28 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation)
 			if tag == "EM" or tag == "I" then
 				return "<color 45 45 45 255>" .. processed_html .. "</color>"
 			end
+			if tag == "STRONG" or tag == "B" then
+				return "<style " .. hooks.bold_style_id .. ">" ..
+					processed_html .. "</style>"
+			end
 			if tag == "U" or tag == "INS" then
 				return "<underline>" .. processed_html .. "</underline>"
+			end
+			if tag == "P" then
+				if processed_html:match("%S") then
+					return processed_html .. paragraph_mark
+				end
+				return ""
+			end
+			if tag == "LI" and state and state.smrcf_item then
+				local indent = string.rep("    ", state.depth or 1)
+				return item_mark .. indent .. state.prefix .. "  " ..
+					processed_html:gsub("^%s+", ""):gsub("%s+$", "")
+			end
+			if tag == "UL" or tag == "OL" then
+				local lists = self.smrcf_lists
+				lists[#lists] = nil
+				return list_open_mark .. processed_html .. list_close_mark
 			end
 			if tag == "BLOCKQUOTE" then
 				return "\n    " .. processed_html:gsub("\n", "\n    ") .. "\n"
@@ -118,11 +177,17 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation)
 		end)
 
 		input = tostring(input or ""):gsub("</?br%s*/?>", "<br/>")
-		return parser:ConvertText(input)
+		local output = parser:ConvertText(input)
+		output = output:gsub(paragraph_mark, "\n\n")
+		output = output:gsub(list_open_mark, "\n\n")
+		output = output:gsub(list_close_mark, "\n\n")
+		output = output:gsub(item_mark, "\n")
+		output = output:gsub("\n\n\n+", "\n\n")
+		return output
 	end
 
 	local raw_description = details.LongDescription
-	if type(raw_description) == "string" then
+	if format_long_description == true and type(raw_description) == "string" then
 		local ok, formatted = pcall(format_description, raw_description)
 		if ok then
 			if hooks.enabled == true and hooks.generation == generation and
@@ -249,12 +314,12 @@ local previous_hooks = type(shared) == "table" and shared.SMRCF_ModDetailsHooks 
 local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
-	Hooks.protocol = 1
+	Hooks.protocol = 2
 	Hooks.worker_fn = nil
 	Hooks.cleanup_fn = nil
 else
 	Hooks = {
-		protocol = 1,
+		protocol = 2,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -267,12 +332,16 @@ else
 		modified = setmetatable({}, { __mode = "k" }),
 		owned_paths = {},
 		next_file = 0,
+		bold_style_id = BOLD_STYLE_ID,
+		bold_style = false,
+		bold_style_original = nil,
 	}
 end
 Hooks.workers = Hooks.workers or {}
 Hooks.modified = Hooks.modified or setmetatable({}, { __mode = "k" })
 Hooks.owned_paths = Hooks.owned_paths or {}
 Hooks.download_original = Hooks.download_original or rawget(_G, DOWNLOAD_FN)
+Hooks.bold_style_id = BOLD_STYLE_ID
 
 local current = rawget(_G, RETRIEVE_FN)
 if current ~= Hooks.wrapper and type(current) == "function" then
@@ -360,6 +429,61 @@ local function compile_runtime()
 	return true
 end
 
+local function clear_bold_style_cache()
+	local cache = rawget(_G, "TextStyleCache")
+	if type(cache) == "table" then cache[BOLD_STYLE_ID] = nil end
+end
+
+function RestoreModDetails.InstallBoldStyle()
+	local styles = rawget(_G, "TextStyles")
+	local text_style = rawget(_G, "TextStyle")
+	if type(styles) ~= "table" or type(text_style) ~= "table" or
+		type(text_style.new) ~= "function" then
+		log("ERROR", "TextStyle API unavailable; cannot install rich bold text")
+		return false
+	end
+	local current = styles[BOLD_STYLE_ID]
+	if Hooks.bold_style and current == Hooks.bold_style then return true end
+	if Hooks.bold_style and current ~= Hooks.bold_style then
+		log("ERROR", "A later text style owns the fix's style id; leaving it unchanged", {
+			style = BOLD_STYLE_ID,
+		})
+		return false
+	end
+	local base = styles.ModsUIDetailsDescription
+	Hooks.bold_style_original = current
+	local owned = text_style:new({
+		id = BOLD_STYLE_ID,
+		group = "ModsUI",
+		FontName = "Droid Sans Bold",
+		FontSize = base and base.FontSize or 26,
+		TextColor = base and base.TextColor or RGB(26, 26, 26),
+		RolloverTextColor = base and base.RolloverTextColor or RGB(26, 26, 26),
+		DisabledTextColor = base and base.DisabledTextColor or RGB(26, 26, 26),
+		DisabledRolloverTextColor = base and base.DisabledRolloverTextColor or RGB(26, 26, 26),
+		ShadowType = base and base.ShadowType or "shadow",
+		ShadowSize = base and base.ShadowSize or 0,
+		ShadowColor = base and base.ShadowColor or 0,
+		ShadowDir = base and base.ShadowDir or point(1, 1),
+	})
+	Hooks.bold_style = owned
+	styles[BOLD_STYLE_ID] = owned
+	clear_bold_style_cache()
+	return true
+end
+
+function RestoreModDetails.RestoreBoldStyle(reason)
+	local styles = rawget(_G, "TextStyles")
+	if type(styles) == "table" and Hooks.bold_style and
+		styles[BOLD_STYLE_ID] == Hooks.bold_style then
+		styles[BOLD_STYLE_ID] = Hooks.bold_style_original
+		clear_bold_style_cache()
+	end
+	Hooks.bold_style = false
+	Hooks.bold_style_original = nil
+	return true
+end
+
 local function call_retrieve_original(...)
 	Hooks.in_call = true
 	local original = Hooks.original
@@ -382,12 +506,23 @@ function RestoreModDetails.CancelWorkers()
 		DeleteThread(thread)
 		Hooks.workers[thread] = nil
 	end
+	Hooks.detail_worker = nil
 	return true
+end
+
+function RestoreModDetails.CancelDetailWorker()
+	local thread = Hooks.detail_worker
+	if thread and Hooks.workers[thread] then
+		DeleteThread(thread)
+		Hooks.workers[thread] = nil
+	end
+	Hooks.detail_worker = nil
 end
 
 local function worker_finished(ok, report, failure)
 	local current_thread = CurrentThread()
 	Hooks.workers[current_thread] = nil
+	if Hooks.detail_worker == current_thread then Hooks.detail_worker = nil end
 	if ok ~= true then
 		log("ERROR", "Mod-detail worker failed", { error = report })
 		return
@@ -399,7 +534,7 @@ local function worker_finished(ok, report, failure)
 		})
 	end
 	if report and report.changed == true and Hooks.enabled == true then
-		log("INFO", "Bug fix invoked: refreshed the selected mod details", correction_context({
+		log("INFO", "Bug fix invoked: refreshed Paradox Mods presentation", correction_context({
 			repair = "refresh_mod_details",
 			reason = "the vanilla detail page reuses a version-only thumbnail cache and drops rich HTML/link behavior",
 			mod_id = report.mod_id,
@@ -410,8 +545,7 @@ local function worker_finished(ok, report, failure)
 end
 
 function RestoreModDetails.Corrected(mod, ...)
-	Hooks.generation = (Hooks.generation or 0) + 1
-	RestoreModDetails.CancelWorkers()
+	RestoreModDetails.CancelDetailWorker()
 	local generation = Hooks.generation
 	local result = { call_retrieve_original(mod, ...) }
 	local vanilla_thread = rawget(_G, "g_PopsRetrieveModDetailsThread")
@@ -419,33 +553,35 @@ function RestoreModDetails.Corrected(mod, ...)
 	if Hooks.enabled == true and mod ~= nil and type(create_thread) == "function" and
 		compile_runtime() == true then
 		local thread = create_thread(function(target, wait_for, token)
-			local ok, report, failure = pcall(Hooks.worker_fn, target, Hooks, wait_for, token)
+			local ok, report, failure = pcall(Hooks.worker_fn, target, Hooks,
+				wait_for, token, true, false)
 			worker_finished(ok, report, failure)
 		end, mod, vanilla_thread, generation)
 		Hooks.workers[thread] = true
+		Hooks.detail_worker = thread
 	end
 	return table.unpack(result)
 end
 
 Hooks.impl = RestoreModDetails.Corrected
 
--- Browse-list downloads share the same ModUI_Entry and can still be queued when
--- its detail worker completes. If vanilla starts a download while this fix owns
--- the thumbnail, let it do all of its normal screenshot work and then put the
--- fresh detail image back. A field already changed by somebody else at entry is
--- never touched.
+-- Browse All and Installed Mods both pass through this queue. Let vanilla finish
+-- its thumbnail and screenshot work, then fetch current full details and install
+-- a fresh thumbnail. Waiting for the owned worker preserves the queue's serial
+-- file behavior, while disable can still cancel just the fix-owned worker.
 function RestoreModDetails.CorrectedDownload(mod, ...)
-	local record = mod and Hooks.modified[mod]
-	local thumbnail = record and record.thumbnail
-	local owned_at_entry = thumbnail and mod.Thumbnail == thumbnail.installed
 	local result = call_download_original(mod, ...)
-	if Hooks.enabled == true and owned_at_entry then
-		local latest = Hooks.modified[mod]
-		latest = latest and latest.thumbnail
-		if latest and mod.Thumbnail ~= latest.installed then
-			mod.Thumbnail = latest.installed
-			if type(mod.ObjModified) == "function" then mod:ObjModified() end
-		end
+	if result[1] == true and Hooks.enabled == true and mod ~= nil and
+		type(rawget(_G, "CreateRealTimeThread")) == "function" and
+		compile_runtime() == true then
+		local generation = Hooks.generation
+		local thread = CreateRealTimeThread(function(target, token)
+			local ok, report, failure = pcall(Hooks.worker_fn, target, Hooks,
+				false, token, false, true)
+			worker_finished(ok, report, failure)
+		end, mod, generation)
+		Hooks.workers[thread] = true
+		WaitThread(thread)
 	end
 	if result[1] ~= true then error(result[2]) end
 	return table.unpack(result, 2)
@@ -527,6 +663,7 @@ function RestoreModDetails.InstallHook(reason)
 		return false
 	end
 	if compile_runtime() ~= true then return false end
+	if RestoreModDetails.InstallBoldStyle() ~= true then return false end
 	if current_fn ~= Hooks.original and current_fn ~= Hooks.wrapper then
 		Hooks.original = current_fn
 		Hooks.original_may_contain_wrapper = true
@@ -557,8 +694,9 @@ function RestoreModDetails.RestoreHook(reason)
 	if rawget(_G, DOWNLOAD_FN) == Hooks.download_wrapper then
 		WaitDownloadModScreenshots = Hooks.download_original
 	end
+	local style_ok = RestoreModDetails.RestoreBoldStyle(reason)
 	log("INFO", "Restored captured mod-detail function and state", { reason = reason })
-	return fields_ok and files_ok
+	return fields_ok and files_ok and style_ok
 end
 
 function RestoreModDetails.SetEnabled(enabled, reason)

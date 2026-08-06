@@ -520,33 +520,35 @@ tags it does not recognize (`CommonLua\X\HTMLParser.lua:67-143`), even though
 `ModsUIModDetails` already handles `OpenUrl` hyperlinks. Thumbnail downloads
 also reuse a cache name made only from ModID and PreferredVersion
 (`CommonLua\Libs\Paradox\ParadoxMods.lua:218-245`), so replacing an image
-without publishing a new mod version leaves the old thumbnail on the detail
-page.
+without publishing a new mod version leaves the old thumbnail in Browse All,
+Installed Mods, and the detail page.
 
 When enabled, Restore Mod Details must:
 
 1. Remain one fix for both symptoms: call the captured
    `ModsUIRetrieveModDetails` first, then post-process only the selected mod
-   after vanilla's detail-retrieval thread finishes. It may also wrap the
-   captured `WaitDownloadModScreenshots` solely to prevent an already queued
-   vanilla browse-list download from overwriting the fresh detail thumbnail.
+   after vanilla's detail-retrieval thread finishes. It must also wrap the
+   captured `WaitDownloadModScreenshots`, let vanilla finish first, then fetch
+   current full details and refresh thumbnails in Browse All and Installed Mods.
 2. Parse `PdxModDetails.LongDescription` with a private parser instance that
-   retains vanilla headings, paragraphs, bold text and lists, preserves the
+   retains headings, uses a fix-owned true-bold text style, separates paragraphs
+   and lists like the website, spaces and indents bullets/numbers, preserves the
    contents of common rich-text tags, and emits clickable `OpenUrl` markup only
    for safe HTTP/HTTPS anchors. It must not change the global `HTMLParser` class.
-3. Download `PdxModDetails.DisplayImagePath` on every detail retrieval with
-   cache-revalidation headers into a unique fix-owned file, without deleting or
-   overwriting the vanilla screenshot/thumbnail cache, then refresh the open UI
-   with `ModUI_Entry:ObjModified()`.
+3. Download the current full response's `DisplayImagePath` for detail and list
+   entries with cache-revalidation headers into a unique fix-owned file, without
+   deleting or overwriting the vanilla screenshot/thumbnail cache, then refresh
+   the visible UI with `ModUI_Entry:ObjModified()`.
 4. Keep reload-safe ownership records for every `LongDescription`, `Thumbnail`,
-   worker and file it changes. Disabling or quiescing must first close the gate
-   and cancel its workers, restore a field only while it still equals this fix's
-   installed value, refresh restored entries, delete only fix-owned files, and
+   worker, file, and text style it changes. Disabling or quiescing must first
+   close the gate and cancel its workers, restore a field only while it still
+   equals this fix's installed value, refresh restored entries, delete only
+   fix-owned files, and
    restore each exact captured function only while the fix still owns its global.
-   A later third-party field value or wrapper must be preserved.
+   A later third-party field value, text style, or wrapper must be preserved.
 5. Remain idempotent across repeated enable/disable and Lua reload, keep no saved
    object or marker, default disabled, and emit one timed `Bug fix invoked:`
-   event for each selected-mod detail refresh that it actually changes.
+   event for each browser entry refresh that it actually changes.
 
 ## 6. Configuration and persistence
 
@@ -624,7 +626,7 @@ Restore Disasters description: Removes stale completed-meteor-storm state that c
 [Beta] Restore Clustered Lights title: Restore Clustered Lights
 [Beta] Restore Clustered Lights description: Prevents v1.0.7 night lights from entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion.
 [Beta] Restore Mod Details title: Restore Mod Details
-[Beta] Restore Mod Details description: Loads each mod's current thumbnail and preserves rich description formatting with clickable links in the Paradox Mods browser.
+[Beta] Restore Mod Details description: Loads current thumbnails throughout the Paradox Mods browser and restores website-style description formatting with clickable links.
 Select group button: Select group
 Unselect group button: Unselect group
 Apply button: Apply
@@ -807,12 +809,13 @@ the engine's item-selection translation assertion.
       calls to delay zero, leaves instant refreshes and `NightLightsOff()`
       unchanged, restores the exact captured function when disabled, and emits
       one timed correction event for each altered delayed transition.
-- [ ] Restore Mod Details refreshes the selected mod from the full-detail
-      response, displays its current thumbnail, preserves rich description text
-      with clickable HTTP/HTTPS links, and does not alter the vanilla cache or
-      global HTML parser. Disabling during and after retrieval cancels its work,
-      restores only fields and the wrapper it still owns, deletes every file it
-      created, preserves later third-party changes, and refreshes the open page.
+- [ ] Restore Mod Details refreshes thumbnails in Browse All, Installed Mods,
+      and the selected mod from current full-detail responses; renders true bold
+      text, website-style paragraph/list spacing, and clickable HTTP/HTTPS links;
+      and does not alter the vanilla cache or global HTML parser. Disabling during
+      and after retrieval cancels its work, restores only fields, styles, and
+      wrappers it still owns, deletes every file it created, preserves later
+      third-party changes, and refreshes visible entries.
 - [ ] `metadata.lua` code order and `items.lua` entries match files on disk.
 - [ ] All Lua files pass available parse checks.
 - [ ] The payload deployed to the local Mods folder includes metadata, items,
@@ -990,14 +993,17 @@ the engine's item-selection translation assertion.
     `atomic_night_light_turn_on` correction for each positive-delay transition.
     Disable the fix and confirm the captured `NightLightsOn()` function is
     restored and no correction event is emitted on the next transition.
-38. Enable Restore Mod Details and browse a mod whose thumbnail was replaced
-    without a version bump and whose description contains headings, bold or
-    italic text, lists, and HTTP/HTTPS links. Confirm the current thumbnail is
-    downloaded and the rich text and clickable links render on the detail page.
+38. Enable Restore Mod Details and view Browse All, Installed Mods, and a mod
+    whose thumbnail was replaced without a version bump and whose description
+    contains headings, bold or italic text, lists, and HTTP/HTTPS links. Confirm
+    the current thumbnail is downloaded in all three views and true bold text,
+    separated paragraphs, indented/spaced lists, and clickable links render on
+    the detail page.
     While another retrieval is active, disable the fix and confirm the worker
     stops, the exact pre-fix description and thumbnail return, the page refreshes,
     and no `SMRCFModDetails_*` file remains in AppData. Repeat after installing a
-    later wrapper/field value and confirm that third-party value is preserved.
+    later wrapper, field value, or text style and confirm that third-party value
+    is preserved.
 39. On disposable copies of existing v1.0.7 saves, enable each applicable fix,
     let its reconciliation or next guarded interaction run, then disable that fix,
     save, and reload. Repeat once with the whole mod disabled after the repairs.

@@ -51,7 +51,7 @@ default. The two stable fixes ship **on**.
 | 013 | Restore Track Demolition | Beta | Completes terminal track-element demolition and removes invalid Track remnants already stored in existing savegames. |
 | 014 | Restore Clustered Lights | Beta | Stops night lights entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion. |
 | 015 | Restore Mod Screenshots | Beta | Shows a mod's screenshots in the Paradox Mods browser, where two separate faults previously produced errors and no pictures. |
-| 016 | Restore Mod Details | Beta | Loads the current thumbnail and preserves rich description formatting with clickable links on a mod's Paradox Mods detail page. |
+| 016 | Restore Mod Details | Beta | Loads current thumbnails in Browse All, Installed Mods, and mod details, and restores website-style bold text, paragraph/list spacing, and clickable links. |
 
 Numbers are permanent and never reused, so a fix keeps its number even if
 another is removed.
