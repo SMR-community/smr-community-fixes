@@ -1,79 +1,71 @@
 # The Paradox Mods upload API
 
-How `pdx_client.py` publishes mod 154004 without the game. Every route, header
-and field here was verified against the live service, and a real publish has
-gone through it.
+This is how `pdx_client.py` publishes the mod without the game installed. The
+service is undocumented, so everything here was established against the live API
+and confirmed by a real publish. It can change without notice.
 
-Paradox documents none of this. It can break without notice.
+The host is `https://api.paradox-interactive.com`. The sandbox and staging hosts
+named inside the SDK have never answered for this game, so there is nothing to
+rehearse against — `--dry-run` is the rehearsal, and it sends nothing.
 
-## Why not use the game
+## Why not just use the game
 
-`PDX_Upload` in the game's Lua is a thin driver over native functions in
-`PDXSDK.dll`, so no HTTP request is built anywhere you can read or reuse, and a
-hosted runner has neither the game nor the SDK. Hence a direct HTTP client.
-
-Host: `https://api.paradox-interactive.com`. The sandbox, staging and test hosts
-named in the DLL have never answered for this game, so there is nothing to
-rehearse against — `--dry-run` is the rehearsal.
+The game's own `PDX_Upload` is a thin Lua wrapper over native code in
+`PDXSDK.dll`. The HTTP request is built inside the DLL, where it can neither be
+read nor reused, and a CI runner has neither the game nor the SDK. Talking to
+the service directly is the only option that works from a hosted runner.
 
 ## Authentication
 
-Despite `AuthorizationHawk` in the DLL there is **no HMAC and no request
-signing**. `Authorization` is a JSON object whose single key names the scheme:
+There is no request signing, despite the `AuthorizationHawk` name in the DLL.
+`Authorization` is a JSON object whose single key names the scheme:
 
 ```
-{"renewal":{"token":"<refresh token>"}}   exchange a refresh token
-{"session":{"token":"<session token>"}}   every other call
+{"renewal":{"token":"<refresh token>"}}   to exchange a refresh token
+{"session":{"token":"<session token>"}}   on every other call
 ```
 
-**A password cannot be used.** The game's login sends `sha256(password + salt)`,
-where the salt is a random per-account value: it never crosses the wire, it is
-not on disk, and 40+ candidate constructions failed to reproduce a captured
-hash. It is computed inside `PDXSDK.dll`. So no runner can log in with a
-password, however freely the password is shared. This is settled; do not
-re-investigate.
+A password cannot be used. The game sends `sha256(password + salt)`, where the
+salt is a random per-account value computed inside the DLL: it never crosses the
+wire and is not stored on disk, so the hash cannot be reproduced anywhere else.
 
-The refresh token, in
-`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\account.json` as
-`refreshToken`, replaces it. Both of these were tested, not assumed:
+The refresh token is used instead. It lives in `account.json` under
+`%LOCALAPPDATA%\PDX\SDK\surviving_mars_relaunched\` as `refreshToken`, and two
+of its properties are what make unattended publishing possible:
 
-* **Renewing does not rotate it.** The reply carries no new refresh token.
-* **Logging out does not revoke it.** Logging out of the game blanks
-  `refreshToken` on disk, but the value keeps working: CI authenticated and
-  confirmed edit rights on the mod with the account logged out.
+* Renewing does not rotate it — the reply carries no new refresh token.
+* Logging out of the game does not revoke it. Logging out blanks the value on
+  disk, but the token itself keeps working.
 
-That is what lets anyone publish at any time. Two consequences:
-
-* **Read the token out while logged in** — logout erases the only local copy,
-  and only a fresh login mints another.
-* **Logging out is not a revocation.** Treat the token as long-lived.
+The practical consequences are that the token has to be copied out while the
+account is logged in, since logging out erases the only local copy, and that it
+should be treated as long-lived rather than as a session credential.
 
 ## Headers
 
-Sent on every call to the api host:
+Every call to the API host carries the game and SDK identification headers:
 
 ```
 X-PDX-Game-Name      X-PDX-Game-Version    X-PDX-Platform
 X-PDX-SDK-Type       X-PDX-SDK-Version     X-PDX-Error-Version
 ```
 
-### `x-accept-version`, which costs an afternoon
+`x-accept-version` is the one that causes trouble. It is a bare integer, and the
+correct value differs per endpoint:
 
-A **bare integer**, and **versioned per endpoint**:
-
-| Call | Value | A wrong value gives |
+| Call | Value | What a wrong value does |
 |---|---|---|
 | renew | omit the header | — |
-| `GET /mods` | `1` | `2` returns 200 with an **empty** `modDetail` |
-| `POST /mods/presigned-urls` | `2` | `1` returns **404** |
-| `PUT /mods/{modId}/versions` | `2` | `1` returns **404** |
+| `GET /mods` | `1` | `2` returns 200 with an empty `modDetail` |
+| `POST /mods/presigned-urls` | `2` | `1` returns 404 |
+| `PUT /mods/{modId}/versions` | `2` | `1` returns 404 |
 
-A malformed value (`2.0`, `v2`) is rejected as `invalid-api-version`, which is
-honest. A well-formed value on the wrong endpoint returns a bare `404`, which
-reads as a route that does not exist — so a correct route can look permanently
-missing when only the header is wrong.
+A malformed value such as `2.0` or `v2` is rejected as `invalid-api-version`,
+which is clear enough. A well-formed value on the wrong endpoint returns a bare
+404, which looks exactly like a route that does not exist — so a correct route
+can appear permanently missing when only this header is wrong.
 
-## The five calls
+## The sequence
 
 ```
 1. renew    PUT  /accounts/sessions/surviving_mars_relaunched
@@ -82,21 +74,21 @@ missing when only the header is wrong.
 
 2. read     GET  /mods?arch=Any&modId=154004&os=Windows
             -> {"result":"OK","modDetail":{…}}
-            modDetail.name is the mod UUID that presign needs. Not `modName`,
-            and not at the top level.
 
 3. presign  POST /mods/presigned-urls
             {"fileName":…,"gameName":…,"modName":<uuid>}
             -> {"presignedUrl","contentType","fileName","modName"}
-            Once per file.
+            once per file
 
-4. upload   PUT  <presignedUrl>      raw bytes, S3, no PDX headers, no auth
+4. upload   PUT  <presignedUrl>    raw bytes to S3, no auth, no PDX headers
 
 5. publish  PUT  /mods/154004/versions
             -> {"result":"OK","state":"publishing","modId":…,"version":N}
 ```
 
-`DELETE /accounts/sessions/{game}` logs out, and is not needed.
+The mod UUID that step 3 needs is `modDetail.name` from step 2 — not `modName`,
+and not a top-level field. `DELETE /accounts/sessions/{game}` logs out and is
+not used.
 
 ## The version PUT
 
@@ -107,93 +99,72 @@ displayName   shortDescription   longDescription
 contentFileName   changelogEntry   recommendedGameVersion
 ```
 
-Optional: `thumbnail`, `tags`, `userModVersion`, `arch`, `os`, `acl`.
+`thumbnail`, `tags`, `userModVersion`, `arch`, `os` and `acl` are optional.
 
-**Three of the six are the mod page's own text, so every publish rewrites the
-description.** Anything left blank is published blank. The client therefore
-reads the mod first and sends those values back unchanged unless overridden, and
-echoes the optional fields for the same reason rather than assuming them — the
-live mod is `arch: Any, os: Any`, so a hardcoded `Windows` would have narrowed
-it. `longDescription` is HTML, and holds wording that exists only on the page.
+Three of the mandatory six are the mod page's own text, which means every
+publish rewrites the page description, and anything left blank is published
+blank. That is why the client reads the mod first and sends those values back
+unchanged unless told otherwise. It echoes the optional fields for the same
+reason instead of assuming them: the live mod is `arch: Any, os: Any`, so
+hardcoding `Windows` would have quietly narrowed it. `longDescription` is HTML
+and holds wording that exists nowhere else, so it is edited on the mod page
+rather than in this repository.
 
-Two behaviours worth knowing:
+Two quirks are worth knowing. Fields are validated before the mod is looked up,
+so a request aimed at a nonexistent mod id reports the missing requirements one
+at a time without being able to publish anything — which is how the list above
+was worked out. And optional fields are not type-checked: a deliberately absurd
+`screenshots: 12345` was accepted without complaint, so a mistake in an optional
+field fails silently rather than erroring.
 
-* **Fields are validated before the mod is looked up.** Aiming a request at a
-  nonexistent mod id reveals the required set one message at a time while having
-  nothing it could publish. That is how the list above was found.
-* **Optional fields are not type-checked.** A deliberately absurd
-  `screenshots: 12345` was accepted, while a required field with a bad type is
-  caught. So a wrong optional field fails silently instead of erroring.
-
-### Errors
+Errors come back in a fixed shape where only `errorMessage` says anything
+useful, `result` being `Failure` in every case:
 
 ```json
 {"result":"Failure","errorCode":"bad-input",
  "errorMessage":"recommendedGameVersion: Must be set","detail":""}
 ```
 
-`result` is always `Failure` and says nothing; `errorMessage` is the useful part.
+## Images
 
-### Images
+Covers and screenshots are uploaded exactly the same way. Nothing in the upload
+itself distinguishes them: the service files an image according to which field
+of the version PUT names it, into `content/covers/` or `content/screenshots/`,
+keeping the filename and generating the resized variants itself.
 
-This repository publishes the cover and nothing else. Recorded in case
-screenshots are ever wanted:
+This repository publishes the cover only. If screenshots are ever wanted, note
+that `screenshots` is the field the service reads *back*, as `{image, thumbnail}`
+URL objects; which field the request uses to send them was never established.
+`screenshotNames` is the likelier name, being a separate literal in the DLL, but
+since optional fields are not validated the only way to confirm it is to publish
+and look at the result.
 
-Covers and screenshots upload identically. Nothing in the upload says which is
-which — the service files an image by **the field of the version PUT that names
-it**, into `content/covers/` or `content/screenshots/`, keeping the filename and
-generating the resized variants itself.
+## If the API changes
 
-`screenshots` is what the service reads *back*, as `{image, thumbnail}` URL
-objects. Which field the *request* uses was never established; `screenshotNames`
-is likelier, being a separate DLL literal, but optional fields are not
-validated, so it can only be confirmed by publishing and looking. Try
-`screenshotNames` first, `screenshots` second. Any mod that has screenshots
-shows the read shape, and mod ids are global across Paradox games.
+There is no certificate pinning, so the routes can be recovered by putting the
+game through an intercepting proxy such as mitmproxy and uploading a mod once
+from its own Mod Editor. Requests are easiest to match to calls by method and
+body field names rather than by path, since the path is the thing being looked
+for.
 
-## If Paradox changes the API
+`x-accept-version` cannot be recovered that way if the capture omits header
+values, which it should. It was originally found by sending `GET /mods` with
+candidate values until one returned 200 instead of `invalid-api-version`.
 
-There is no certificate pinning, so an intercepting proxy recovers the routes.
-The tooling that did this originally has been deleted; it was a day's work and
-this file is its output. To redo it:
-
-```
-pip install mitmproxy
-mitmdump --listen-port 8080     # once, to generate ~/.mitmproxy/
-```
-
-Trust `~/.mitmproxy/mitmproxy-ca-cert.pem`, then send the game through the proxy
-and upload the mod once from its Mod Editor:
-
-```text
-Windows   certutil -addstore -f ROOT "%USERPROFILE%\.mitmproxy\mitmproxy-ca-cert.pem"
-          then Internet Settings -> proxy 127.0.0.1:8080
-macOS     sudo security add-trusted-cert -d -r trustRoot \
-              -k /Library/Keychains/System.keychain ~/.mitmproxy/mitmproxy-ca-cert.pem
-          sudo networksetup -setsecurewebproxy Wi-Fi 127.0.0.1 8080
-Linux     copy the CA into /usr/local/share/ca-certificates and update-ca-certificates
-          launch with HTTPS_PROXY=http://127.0.0.1:8080
-```
-
-Record only method, path, status, header *names* and body *field names* — never
-values. A capture of a login once leaked an account email, the login hash and
-session tokens into a file because the addon logged a whole header. Match
-requests to calls by method and body field names rather than by path, since the
-path is the unknown. Undo the proxy and remove the CA afterwards
-(`certutil -user -delstore Root mitmproxy`).
-
-A capture cannot give you `x-accept-version`, since it records names and not
-values. Recover it as it was found the first time: send `GET /mods` with
-candidate values until one returns 200 instead of `invalid-api-version`.
+Capture method, path, status, header *names* and body *field names* only, never
+values. An early capture of a login logged an entire header and wrote an account
+email, the login hash and live session tokens into a file. Removing the proxy
+and its certificate afterwards matters for the same reason.
 
 ## Risks
 
-* **Undocumented and unsupported.** Any change on Paradox's side breaks this
-  with no notice. Check their terms before relying on it.
-* **`PDX_REFRESH` is readable by every organisation member**, since anyone who
-  can push a workflow can print a secret, and every member can push to `main`.
-  Logging out does *not* withdraw it, so use a dedicated publishing account that
-  owns nothing else.
-* **The token can stop working.** A publish that fails at `renew` with 401 needs
-  a fresh `refreshToken` and a new `gh secret set PDX_REFRESH`. A dry run
-  reports this before a tag does.
+* The API is undocumented and unsupported. Any change on Paradox's side breaks
+  publishing with no warning, and their terms are worth reading before relying
+  on it.
+* `PDX_REFRESH` can be read by any organisation member, because anyone able to
+  push a workflow can print a secret and every member can push to `main`.
+  Logging out does not withdraw it, so the publishing account should be a
+  dedicated one that owns nothing else.
+* The token can stop working. A publish that fails at `renew` with a 401 needs a
+  fresh `refreshToken` and a new `gh secret set PDX_REFRESH`. A dry run reports
+  this before a tag does.
