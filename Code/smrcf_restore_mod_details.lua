@@ -14,8 +14,10 @@
 -- Vanilla still performs all of its normal work first. Fix-owned real-time
 -- workers format the returned LongDescription with a private HTMLParser instance
 -- and download the latest DisplayImagePath to unique, fix-owned AppData files.
--- List entries without a full response fetch it without storing it on the entry.
--- The vanilla screenshot cache is never edited.
+-- List-entry updates download the current thumbnail before their first refresh,
+-- and detail retrieval defers its refresh until formatting finishes. The stale
+-- cached image and raw description therefore never reach the UI. The vanilla
+-- screenshot cache is never edited.
 --
 -- AsyncWebRequest and the file APIs are unavailable in a mod environment. The
 -- worker is compiled through LuaCodeToTuple without an env argument, matching
@@ -32,12 +34,13 @@ local FIX = {
 	default_enabled = false,
 	debug = false,
 	label = "Restore Mod Details",
-	description = "Loads current thumbnails throughout the Paradox Mods browser and restores HTML/Steam formatting, Unicode symbols, emoji, and clickable links.",
+	description = "Shows only current thumbnails and already-formatted HTML/Steam descriptions with Unicode, emoji, and clickable links.",
 }
 
 local RETRIEVE_FN = "ModsUIRetrieveModDetails"
 local DOWNLOAD_FN = "WaitDownloadModScreenshots"
 local SCHEDULE_FN = "ModsUIDownloadScreenshots"
+local ENTRY_UPDATE_METHOD = "UpdateEntryFromSubscribedMod"
 local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
 local FALLBACK_FONT_NAMES = { "Segoe UI Emoji", "Segoe UI Symbol" }
@@ -52,7 +55,7 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		return { cancelled = true }
 	end
 
-	local details = mod and mod.PdxModDetails
+	local details = mod and (mod.PdxModDetails or mod.Pdx)
 	local detail_error
 	if mod and fetch_current_details == true then
 		local mod_id = type(mod.PdxModId) == "function" and mod:PdxModId()
@@ -440,12 +443,12 @@ local previous_hooks = type(shared) == "table" and shared.SMRCF_ModDetailsHooks 
 local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
-	Hooks.protocol = 3
+	Hooks.protocol = 4
 	Hooks.worker_fn = nil
 	Hooks.cleanup_fn = nil
 else
 	Hooks = {
-		protocol = 3,
+		protocol = 4,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -467,6 +470,10 @@ else
 		bold_style_id = BOLD_STYLE_ID,
 		bold_style = false,
 		bold_style_original = nil,
+		entry_update_original = false,
+		entry_update_wrapper = false,
+		entry_update_in_call = false,
+		notification_gates = setmetatable({}, { __mode = "k" }),
 		fallback_fonts = false,
 		fallback_fonts_original = nil,
 		fallback_fonts_expected = false,
@@ -475,10 +482,19 @@ end
 Hooks.workers = Hooks.workers or {}
 Hooks.modified = Hooks.modified or setmetatable({}, { __mode = "k" })
 Hooks.owned_paths = Hooks.owned_paths or {}
+Hooks.notification_gates = Hooks.notification_gates or
+	setmetatable({}, { __mode = "k" })
 Hooks.download_original = Hooks.download_original or rawget(_G, DOWNLOAD_FN)
 Hooks.schedule_original = Hooks.schedule_original or rawget(_G, SCHEDULE_FN)
 Hooks.body_style_id = BODY_STYLE_ID
 Hooks.bold_style_id = BOLD_STYLE_ID
+
+local entry_class = rawget(_G, "ModUI_Entry")
+local current_entry_update = type(entry_class) == "table" and
+	entry_class[ENTRY_UPDATE_METHOD]
+Hooks.entry_update_original = Hooks.entry_update_original or current_entry_update
+Hooks.entry_update_base_original = Hooks.entry_update_base_original or
+	Hooks.entry_update_original
 
 local current = rawget(_G, RETRIEVE_FN)
 if current ~= Hooks.wrapper and type(current) == "function" then
@@ -504,6 +520,14 @@ if current_schedule ~= Hooks.schedule_wrapper and type(current_schedule) == "fun
 	Hooks.schedule_original = current_schedule
 end
 Hooks.schedule_base_original = Hooks.schedule_base_original or Hooks.schedule_original
+
+if current_entry_update ~= Hooks.entry_update_wrapper and
+	type(current_entry_update) == "function" then
+	if current_entry_update ~= Hooks.entry_update_original then
+		Hooks.entry_update_original_may_contain_wrapper = true
+	end
+	Hooks.entry_update_original = current_entry_update
+end
 
 if type(Hooks.wrapper) ~= "function" then
 	Hooks.wrapper = function(...)
@@ -539,6 +563,20 @@ if type(Hooks.schedule_wrapper) ~= "function" then
 			return Hooks.schedule_base_original(...)
 		end
 		return Hooks.schedule_original(...)
+	end
+end
+if type(Hooks.entry_update_wrapper) ~= "function" then
+	Hooks.entry_update_wrapper = function(...)
+		if Hooks.entry_update_in_call == true then
+			return Hooks.entry_update_base_original(...)
+		end
+		if Hooks.enabled == true and type(Hooks.entry_update_impl) == "function" then
+			return Hooks.entry_update_impl(...)
+		end
+		if Hooks.entry_update_original_may_contain_wrapper == true then
+			return Hooks.entry_update_base_original(...)
+		end
+		return Hooks.entry_update_original(...)
 	end
 end
 if type(shared) == "table" then shared.SMRCF_ModDetailsHooks = Hooks end
@@ -740,11 +778,88 @@ function RestoreModDetails.RestoreBoldStyle(reason)
 	return true
 end
 
+local function begin_notification_gate(mod)
+	if type(mod) ~= "table" then return nil end
+	local gate = Hooks.notification_gates[mod]
+	if gate then
+		gate.depth = (gate.depth or 1) + 1
+		return gate
+	end
+	gate = {
+		depth = 1,
+		dirty = false,
+		original = rawget(mod, "ObjModified"),
+	}
+	gate.wrapper = function(target, ...)
+		local active = Hooks.notification_gates[target]
+		if active == gate and Hooks.enabled == true then
+			active.dirty = true
+			return
+		end
+		if type(gate.original) == "function" then
+			return gate.original(target, ...)
+		end
+		local class = rawget(_G, "ModUI_Entry")
+		local method = type(class) == "table" and class.ObjModified
+		if type(method) == "function" and method ~= gate.wrapper then
+			return method(target, ...)
+		end
+	end
+	Hooks.notification_gates[mod] = gate
+	rawset(mod, "ObjModified", gate.wrapper)
+	return gate
+end
+
+local function release_notification_gate(mod, notify, force)
+	local gate = type(mod) == "table" and Hooks.notification_gates[mod]
+	if not gate then return true end
+	if force ~= true and (gate.depth or 1) > 1 then
+		gate.depth = gate.depth - 1
+		return true
+	end
+	Hooks.notification_gates[mod] = nil
+	if rawget(mod, "ObjModified") == gate.wrapper then
+		rawset(mod, "ObjModified", gate.original)
+	end
+	if notify == true or gate.dirty == true then
+		local current = mod.ObjModified
+		if type(current) == "function" and current ~= gate.wrapper then
+			local ok, failure = pcall(current, mod)
+			if not ok then
+				log("ERROR", "Could not release a deferred mod-entry refresh", {
+					error = failure,
+				})
+				return false
+			end
+		end
+	end
+	return true
+end
+
+function RestoreModDetails.ReleaseNotificationGates(notify)
+	local mods = {}
+	for mod in pairs(Hooks.notification_gates) do mods[#mods + 1] = mod end
+	local all_ok = true
+	for _, mod in ipairs(mods) do
+		if release_notification_gate(mod, notify, true) ~= true then all_ok = false end
+	end
+	return all_ok
+end
+
 local function call_retrieve_original(...)
 	Hooks.in_call = true
 	local original = Hooks.original
 	local result = { pcall(original, ...) }
 	Hooks.in_call = false
+	if result[1] ~= true then error(result[2]) end
+	return table.unpack(result, 2)
+end
+
+local function call_entry_update_original(...)
+	Hooks.entry_update_in_call = true
+	local original = Hooks.entry_update_original
+	local result = { pcall(original, ...) }
+	Hooks.entry_update_in_call = false
 	if result[1] ~= true then error(result[2]) end
 	return table.unpack(result, 2)
 end
@@ -771,6 +886,7 @@ function RestoreModDetails.CancelWorkers()
 		Hooks.workers[thread] = nil
 	end
 	Hooks.detail_worker = nil
+	Hooks.detail_worker_mod = nil
 	return true
 end
 
@@ -780,13 +896,20 @@ function RestoreModDetails.CancelDetailWorker()
 		DeleteThread(thread)
 		Hooks.workers[thread] = nil
 	end
+	if Hooks.detail_worker_mod then
+		release_notification_gate(Hooks.detail_worker_mod, true, true)
+	end
 	Hooks.detail_worker = nil
+	Hooks.detail_worker_mod = nil
 end
 
 local function worker_finished(ok, report, failure)
 	local current_thread = CurrentThread()
 	Hooks.workers[current_thread] = nil
-	if Hooks.detail_worker == current_thread then Hooks.detail_worker = nil end
+	if Hooks.detail_worker == current_thread then
+		Hooks.detail_worker = nil
+		Hooks.detail_worker_mod = nil
+	end
 	if ok ~= true then
 		log("ERROR", "Mod-detail worker failed", { error = report })
 		return
@@ -808,8 +931,49 @@ local function worker_finished(ok, report, failure)
 	end
 end
 
+local function hide_stale_thumbnail(mod)
+	local record = Hooks.modified[mod] or {}
+	local previous = record.thumbnail
+	local current = mod.Thumbnail
+	local original = current
+	if previous and (current == previous.installed or previous.pending == true) then
+		original = previous.original
+	end
+	mod.Thumbnail = nil
+	record.thumbnail = {
+		original = original,
+		installed = nil,
+		pending = true,
+	}
+	Hooks.modified[mod] = record
+end
+
+function RestoreModDetails.CorrectedEntryUpdate(mod, ...)
+	local result = { call_entry_update_original(mod, ...) }
+	if Hooks.enabled == true and type(mod) == "table" and
+		(mod.PdxModDetails or mod.Pdx) then
+		hide_stale_thumbnail(mod)
+		local is_realtime = rawget(_G, "IsRealTimeThread")
+		if type(is_realtime) == "function" and is_realtime() and
+			compile_runtime() == true then
+			local ok, report, failure = pcall(Hooks.worker_fn, mod, Hooks,
+				false, Hooks.generation, false, true)
+			if ok ~= true or failure then
+				log("ERROR", "Could not refresh a thumbnail before its first render", {
+					error = ok == true and failure or report,
+					mod_id = type(mod.PdxModId) == "function" and mod:PdxModId(),
+				})
+			end
+		end
+	end
+	return table.unpack(result)
+end
+
+Hooks.entry_update_impl = RestoreModDetails.CorrectedEntryUpdate
+
 function RestoreModDetails.Corrected(mod, ...)
 	RestoreModDetails.CancelDetailWorker()
+	begin_notification_gate(mod)
 	local generation = Hooks.generation
 	local result = { call_retrieve_original(mod, ...) }
 	local vanilla_thread = rawget(_G, "g_PopsRetrieveModDetailsThread")
@@ -819,24 +983,30 @@ function RestoreModDetails.Corrected(mod, ...)
 		local thread = create_thread(function(target, wait_for, token)
 			local ok, report, failure = pcall(Hooks.worker_fn, target, Hooks,
 				wait_for, token, true, false)
+			release_notification_gate(target, true, true)
 			worker_finished(ok, report, failure)
 		end, mod, vanilla_thread, generation)
 		Hooks.workers[thread] = true
 		Hooks.detail_worker = thread
+		Hooks.detail_worker_mod = mod
+	else
+		release_notification_gate(mod, true, true)
 	end
 	return table.unpack(result)
 end
 
 Hooks.impl = RestoreModDetails.Corrected
 
--- The list loader calls this before it redraws a newly materialized Browse All
--- or Installed Mods entry. Queue vanilla's normal thumbnail/screenshots first,
--- then synchronously wait for a tracked current-thumbnail worker. The entry's
--- very first populated render therefore has the current image instead of the
--- version-keyed cache image.
+-- Queue vanilla's normal thumbnail/screenshots work. If an entry-update path
+-- could not synchronously install the current thumbnail, wait for a tracked
+-- current-thumbnail worker before returning.
 function RestoreModDetails.CorrectedSchedule(mod, ...)
 	local result = call_schedule_original(mod, ...)
-	if result[1] == true and Hooks.enabled == true and mod ~= nil and
+	local record = mod and Hooks.modified[mod]
+	local thumbnail = record and record.thumbnail
+	local ready = thumbnail and thumbnail.installed and
+		mod.Thumbnail == thumbnail.installed
+	if result[1] == true and not ready and Hooks.enabled == true and mod ~= nil and
 		type(rawget(_G, "CreateRealTimeThread")) == "function" and
 		compile_runtime() == true then
 		local generation = Hooks.generation
@@ -859,6 +1029,7 @@ Hooks.schedule_impl = RestoreModDetails.CorrectedSchedule
 -- current thumbnail, restore that exact path after vanilla replaces it with the
 -- stale cache. Calls from any other path still fetch a current full response.
 function RestoreModDetails.CorrectedDownload(mod, ...)
+	begin_notification_gate(mod)
 	local record = mod and Hooks.modified[mod]
 	local thumbnail = record and record.thumbnail
 	local owned_at_entry = thumbnail and mod.Thumbnail == thumbnail.installed
@@ -882,6 +1053,7 @@ function RestoreModDetails.CorrectedDownload(mod, ...)
 		Hooks.workers[thread] = true
 		WaitThread(thread)
 	end
+	release_notification_gate(mod, true)
 	if result[1] ~= true then error(result[2]) end
 	return table.unpack(result, 2)
 end
@@ -954,12 +1126,17 @@ function RestoreModDetails.InstallHook(reason)
 	local current_fn = rawget(_G, RETRIEVE_FN)
 	local current_download_fn = rawget(_G, DOWNLOAD_FN)
 	local current_schedule_fn = rawget(_G, SCHEDULE_FN)
+	local current_entry_class = rawget(_G, "ModUI_Entry")
+	local current_entry_update_fn = type(current_entry_class) == "table" and
+		current_entry_class[ENTRY_UPDATE_METHOD]
 	if type(current_fn) ~= "function" or type(current_download_fn) ~= "function" or
-		type(current_schedule_fn) ~= "function" then
+		type(current_schedule_fn) ~= "function" or
+		type(current_entry_update_fn) ~= "function" then
 		log("ERROR", "Required v1.0.7 API is unavailable; fix not installed", {
 			fn = RETRIEVE_FN,
 			download_fn = DOWNLOAD_FN,
 			schedule_fn = SCHEDULE_FN,
+			entry_update = ENTRY_UPDATE_METHOD,
 			reason = reason,
 		})
 		return false
@@ -984,10 +1161,16 @@ function RestoreModDetails.InstallHook(reason)
 		Hooks.schedule_original = current_schedule_fn
 		Hooks.schedule_original_may_contain_wrapper = true
 	end
+	if current_entry_update_fn ~= Hooks.entry_update_original and
+		current_entry_update_fn ~= Hooks.entry_update_wrapper then
+		Hooks.entry_update_original = current_entry_update_fn
+		Hooks.entry_update_original_may_contain_wrapper = true
+	end
 	local was_enabled = Hooks.enabled == true
 	ModsUIRetrieveModDetails = Hooks.wrapper
 	WaitDownloadModScreenshots = Hooks.download_wrapper
 	ModsUIDownloadScreenshots = Hooks.schedule_wrapper
+	current_entry_class[ENTRY_UPDATE_METHOD] = Hooks.entry_update_wrapper
 	RestoreModDetails.enabled = true
 	Hooks.enabled = true
 	if not was_enabled then
@@ -1013,6 +1196,7 @@ function RestoreModDetails.RestoreHook(reason)
 	Hooks.generation = (Hooks.generation or 0) + 1
 	RestoreModDetails.CancelWorkers()
 	local fields_ok = RestoreModDetails.RestoreModifiedEntries(reason)
+	local gates_ok = RestoreModDetails.ReleaseNotificationGates(true)
 	local files_ok = RestoreModDetails.CleanupOwnedFiles(reason)
 	if rawget(_G, RETRIEVE_FN) == Hooks.wrapper then
 		ModsUIRetrieveModDetails = Hooks.original
@@ -1023,10 +1207,15 @@ function RestoreModDetails.RestoreHook(reason)
 	if rawget(_G, SCHEDULE_FN) == Hooks.schedule_wrapper then
 		ModsUIDownloadScreenshots = Hooks.schedule_original
 	end
+	local current_entry_class = rawget(_G, "ModUI_Entry")
+	if type(current_entry_class) == "table" and
+		current_entry_class[ENTRY_UPDATE_METHOD] == Hooks.entry_update_wrapper then
+		current_entry_class[ENTRY_UPDATE_METHOD] = Hooks.entry_update_original
+	end
 	local style_ok = RestoreModDetails.RestoreBoldStyle(reason)
 	local fallback_ok = RestoreModDetails.RestoreFallbackFonts(reason)
 	log("INFO", "Restored captured mod-detail function and state", { reason = reason })
-	return fields_ok and files_ok and style_ok and fallback_ok
+	return fields_ok and gates_ok and files_ok and style_ok and fallback_ok
 end
 
 function RestoreModDetails.SetEnabled(enabled, reason)

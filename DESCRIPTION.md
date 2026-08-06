@@ -527,10 +527,12 @@ When enabled, Restore Mod Details must:
 
 1. Remain one fix for both symptoms: call the captured
    `ModsUIRetrieveModDetails` first, then post-process only the selected mod
-   after vanilla's detail-retrieval thread finishes. It must also wrap the
-   captured `ModsUIDownloadScreenshots` and `WaitDownloadModScreenshots` so it
-   fetches current full details before a newly loaded Browse All or Installed
-   Mods entry first renders, while preserving vanilla's queued work.
+   after vanilla's detail-retrieval thread finishes. Defer its raw refresh until
+   formatting completes. It must also wrap the captured
+   `ModUI_Entry:UpdateEntryFromSubscribedMod`, `ModsUIDownloadScreenshots`, and
+   `WaitDownloadModScreenshots` so it fetches the current thumbnail before a
+   newly loaded Browse All or Installed Mods entry first renders, while
+   preserving vanilla's queued work and suppressing its stale-cache refresh.
 2. Detect HTML or Steam BBCode descriptions and parse them with private parser
    instances. Retain headings, bold/italic/underline text, lists, quotes, code,
    separators, and safe HTTP/HTTPS links; decode numeric Unicode entities; wrap
@@ -544,8 +546,8 @@ When enabled, Restore Mod Details must:
 4. Keep reload-safe ownership records for every `LongDescription`, `Thumbnail`,
    worker, file, text style, and fallback-font list it changes. Disabling or
    quiescing must first close the gate and cancel its workers, restore a field
-   only while it still
-   equals this fix's installed value, refresh restored entries, delete only
+   only while it still equals this fix's installed value, refresh restored
+   entries, delete only
    fix-owned files, and restore each exact captured function only while the fix
    still owns its global.
    A later third-party field value, text style, or wrapper must be preserved.
@@ -814,8 +816,9 @@ the engine's item-selection translation assertion.
       one timed correction event for each altered delayed transition.
 - [ ] Restore Mod Details refreshes thumbnails in Browse All, Installed Mods,
       and the selected mod from current full-detail responses before their first
-      populated render; renders HTML and Steam BBCode at 20 points with visibly
-      bold text, Unicode arrows/symbols/emoji, website-style paragraph/list
+      populated render without flashing the stale cache; withholds raw detail
+      text until HTML or Steam BBCode has been formatted at 20 points with
+      visible bold, Unicode arrows/symbols/emoji, website-style paragraph/list
       spacing, and clickable HTTP/HTTPS links; and does not alter the vanilla
       cache or global parser classes. Disabling during
       and after retrieval cancels its work, restores only fields, styles, and
@@ -1002,10 +1005,10 @@ the engine's item-selection translation assertion.
     whose thumbnail was replaced without a version bump and whose description
     contains HTML or Steam headings, bold or italic text, lists, Unicode arrows,
     numeric emoji entities, and HTTP/HTTPS links. Confirm
-    the current thumbnail is visible on the first populated render in all three
-    views and bold text is visibly heavier than surrounding regular text,
-    separated paragraphs, indented/spaced lists, and clickable links render on
-    the detail page.
+    only the current thumbnail is visible in all three views, with no stale-cache
+    flash, and the detail page never exposes the raw description before bold
+    text, separated paragraphs, indented/spaced lists, and clickable links have
+    been formatted.
     While another retrieval is active, disable the fix and confirm the worker
     stops, the exact pre-fix description and thumbnail return, the page refreshes,
     and no `SMRCFModDetails_*` file remains in AppData. Repeat after installing a
