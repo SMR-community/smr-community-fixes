@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -99,9 +100,26 @@ ROUTES: dict[str, Route] = {
 QUERY_ARCH = "Any"
 QUERY_OS = "Windows"
 
-# The one required field with no counterpart in the mod record, so it cannot be
-# read back and has to be stated here.
-DEFAULT_RECOMMENDED_GAME_VERSION = "1.0.7"
+# The game compares this field to LuaRevision (an integer build id), not to a
+# human version like "1.0.7". The in-game publisher sends tostring(mod.lua_revision).
+_LUA_REVISION_RE = re.compile(r"""['"]lua_revision['"]\s*,\s*(\d+)""")
+
+
+def read_lua_revision(metadata_path: str = "metadata.lua") -> str:
+    """Return metadata.lua's lua_revision as a string for recommendedGameVersion."""
+    with open(metadata_path, encoding="utf-8") as handle:
+        text = handle.read()
+    match = _LUA_REVISION_RE.search(text)
+    if not match:
+        raise PdxError("metadata",
+                       f"could not read lua_revision from {metadata_path}")
+    return match.group(1)
+
+
+def resolved_recommended_game_version(args: argparse.Namespace) -> str:
+    if args.recommended_game_version.strip():
+        return args.recommended_game_version.strip()
+    return read_lua_revision(args.metadata)
 
 
 class PdxError(RuntimeError):
@@ -415,7 +433,7 @@ def version_body(args: argparse.Namespace, live: dict, thumb: dict,
         "shortDescription": short_description,
         "longDescription": long_description,
         "changelogEntry": args.changelog,
-        "recommendedGameVersion": args.recommended_game_version,
+        "recommendedGameVersion": resolved_recommended_game_version(args),
         "userModVersion": str(args.version),
         # Optional to send, but echoed back rather than assumed: the mod is
         # published for every arch and os, and naming one here would quietly
@@ -566,6 +584,14 @@ def preflight(args: argparse.Namespace) -> int:
               "version without one")
         ok = False
 
+    try:
+        recommended = resolved_recommended_game_version(args)
+        print(f"  ok      recommendedGameVersion {recommended!r} "
+              f"(from {args.metadata})")
+    except PdxError as exc:
+        print(f"  MISSING {exc}")
+        ok = False
+
     # Last, and only if the rest holds: no point asking the service anything
     # when the payload is already wrong.
     if ok and os.environ.get("PDX_REFRESH") and not args.offline:
@@ -593,8 +619,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--short-description", default="")
     parser.add_argument("--description-file")
     parser.add_argument("--changelog", default="")
-    parser.add_argument("--recommended-game-version",
-                        default=DEFAULT_RECOMMENDED_GAME_VERSION)
+    parser.add_argument("--metadata", default="metadata.lua",
+                        help="mod metadata.lua; lua_revision becomes "
+                             "recommendedGameVersion unless overridden")
+    parser.add_argument("--recommended-game-version", default="",
+                        help="override recommendedGameVersion; default is "
+                             "lua_revision from --metadata")
     parser.add_argument("--version", type=int, required=True)
     parser.add_argument("--mod-id", type=int, required=True)
     parser.add_argument("--tag", action="append", default=[])

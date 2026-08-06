@@ -99,6 +99,13 @@ displayName   shortDescription   longDescription
 contentFileName   changelogEntry   recommendedGameVersion
 ```
 
+`recommendedGameVersion` must be the mod's `lua_revision` integer as a string
+(for example `"350453"`), not a human version like `"1.0.7"`. The game's mod
+browser passes the value through `tonumber` and compares it to `ModMinLuaRevision`
+and `LuaRevision`; `"1.0.7"` does not parse and triggers a false incompatibility
+warning on install. The in-game publisher sends `tostring(mod.lua_revision)`;
+`pdx_client.py` reads the same field from `metadata.lua` unless overridden.
+
 `thumbnail`, `tags`, `userModVersion`, `arch`, `os` and `acl` are optional.
 
 Three of the mandatory six are the mod page's own text, which means every
