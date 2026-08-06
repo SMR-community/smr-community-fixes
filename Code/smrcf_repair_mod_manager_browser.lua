@@ -35,6 +35,16 @@
 -- images and raw descriptions therefore never reach the UI, and the existing
 -- thumbnail-click behavior selects which image is shown at full size.
 --
+-- The browser is what makes that affordable. Vanilla rebuilds every visible row
+-- whenever the list is shown - which is what leaving a mod page does - and resets
+-- each Thumbnail to the stale cache path on the way, so a naive implementation
+-- asks the network for images it already has, once per row, while the player
+-- waits. Three things keep that off the screen: a row reads the image URL out of
+-- the list response the game just built instead of spending a detail request of
+-- its own, a recently downloaded URL is reused from disk rather than fetched
+-- again, and a row refresh waits only briefly for its worker before letting it
+-- finish in the background and refresh the entry itself.
+--
 -- AsyncWebRequest and the file APIs are unavailable in a mod environment. The
 -- worker is compiled through LuaCodeToTuple without an env argument, matching
 -- the game's own environment while keeping all ownership state in SharedModEnv.
@@ -62,6 +72,12 @@ local SCREENSHOT_URLS_FIELD = "ScreenshotUrls"
 local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
 local FALLBACK_FONT_NAMES = { "Segoe UI Emoji", "Segoe UI Symbol" }
+-- How long a downloaded image may be reused for the same URL, and how long a
+-- browser list refresh may block waiting for one. The wait is what keeps the
+-- stale cached image from showing; past the deadline the worker finishes in the
+-- background and refreshes the entry itself, so the browser never freezes.
+local IMAGE_CACHE_TTL_MS = 5 * 60 * 1000
+local LIST_REFRESH_WAIT_MS = 250
 
 -- Runs in the game environment, not this mod's restricted environment.
 local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
@@ -73,9 +89,21 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		return { cancelled = true }
 	end
 
+	-- The list responses already carry a current DisplayImagePath, so the browser
+	-- paths read the entry the game just built rather than spending one
+	-- AsyncPdxGetModDetails round trip per row. Only the detail page, which also
+	-- needs LongDescription and the full screenshot set, asks the API itself -
+	-- and only when the entry it was handed cannot supply an image at all.
 	local details = mod and (mod.PdxModDetails or mod.Pdx)
 	local detail_error
-	if mod and fetch_current_details == true then
+	local function image_url(source)
+		local url = type(source) == "table" and source.DisplayImagePath or nil
+		if type(url) ~= "string" or url == "" then return nil end
+		return url
+	end
+	if mod and (fetch_current_details == true or
+		(image_url(details) == nil and image_url(mod) == nil))
+	then
 		local mod_id = type(mod.PdxModId) == "function" and mod:PdxModId()
 		if mod_id then
 			detail_error, details = AsyncPdxGetModDetails({ ModID = mod_id })
@@ -106,7 +134,28 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		return true
 	end
 
+	-- Vanilla rebuilds its list entries constantly, and each rebuild resets
+	-- Thumbnail to the stale cache path, which defeats the per-entry readiness
+	-- check below and asks for the same image again. A short-lived url -> file
+	-- map makes that second ask free. The window is deliberately small: the whole
+	-- point of this fix is that an author can replace an image behind a URL that
+	-- never changes, so the file is re-fetched once the entry goes cold.
+	local function cached_download(url)
+		local cache = hooks.file_cache
+		local entry = type(cache) == "table" and cache[url] or nil
+		if not entry then return nil end
+		local age = RealTime() - (entry.time or 0)
+		if age < 0 or age > (hooks.file_cache_ttl or 0) then return nil end
+		if not io.exists(entry.path) then
+			cache[url] = nil
+			return nil
+		end
+		return entry.path
+	end
+
 	local function reserve_and_download(url, kind, index)
+		local reused = cached_download(url)
+		if reused then return reused, nil end
 		local clean_url = url:match("^[^?#]+") or url
 		local ext = string.lower(clean_url:match("%.([%w]+)$") or "jpg")
 		local allowed = { jpg = true, jpeg = true, png = true, bmp = true, tga = true }
@@ -141,6 +190,9 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		end
 		if hooks.enabled ~= true or hooks.generation ~= generation then
 			return nil, "cancelled"
+		end
+		if not err and type(hooks.file_cache) == "table" then
+			hooks.file_cache[url] = { path = final_path, time = RealTime() }
 		end
 		return not err and final_path or nil, err
 	end
@@ -405,7 +457,7 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		return report
 	end
 
-	local url = details.DisplayImagePath
+	local url = image_url(details) or image_url(mod)
 	if type(url) == "string" and url ~= "" then
 		local existing = hooks.modified[mod]
 		existing = existing and existing.thumbnail
@@ -439,10 +491,18 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		return report
 	end
 
+	-- A browser row is described by the list response, which carries an image but
+	-- not always a screenshot set. Saying nothing about screenshots is not the
+	-- same as saying there are none, so leave ScreenshotPaths untouched unless
+	-- this response actually describes them.
+	local screenshots = details.Screenshots
+	if type(screenshots) ~= "table" then
+		return report, #failures > 0 and table.concat(failures, "; ") or nil
+	end
+
 	local screenshot_urls = {}
 	local seen_urls = {}
-	local screenshots = details.Screenshots
-	if type(screenshots) == "table" then
+	do
 		for index = 1, #screenshots do
 			local item = screenshots[index]
 			local screenshot_url = type(item) == "table" and item.Image or item
@@ -551,12 +611,12 @@ local previous_hooks = type(shared) == "table" and shared.SMRCF_ModDetailsHooks 
 local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
-	Hooks.protocol = 5
+	Hooks.protocol = 6
 	Hooks.worker_fn = nil
 	Hooks.cleanup_fn = nil
 else
 	Hooks = {
-		protocol = 5,
+		protocol = 6,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -574,6 +634,7 @@ else
 		workers = {},
 		modified = setmetatable({}, { __mode = "k" }),
 		owned_paths = {},
+		file_cache = {},
 		next_file = 0,
 		body_style_id = BODY_STYLE_ID,
 		body_style = false,
@@ -593,6 +654,8 @@ end
 Hooks.workers = Hooks.workers or {}
 Hooks.modified = Hooks.modified or setmetatable({}, { __mode = "k" })
 Hooks.owned_paths = Hooks.owned_paths or {}
+Hooks.file_cache = Hooks.file_cache or {}
+Hooks.file_cache_ttl = IMAGE_CACHE_TTL_MS
 Hooks.notification_gates = Hooks.notification_gates or
 	setmetatable({}, { __mode = "k" })
 Hooks.download_original = Hooks.download_original or rawget(_G, DOWNLOAD_FN)
@@ -1271,9 +1334,30 @@ end
 
 Hooks.dialog_impl = RestoreModDetails.CorrectedDialogMode
 
+-- Wait a short moment for a browser-list worker, then leave it to finish on its
+-- own. The wait is what stops the stale cached image being shown before the
+-- current one arrives; waiting with no deadline is what made leaving a mod page
+-- hang, because vanilla rebuilds every visible row and each row waited on its
+-- own network round trip in turn. Past the deadline the worker still installs
+-- the current image and refreshes the entry, one frame later than ideal.
+local function wait_for_worker(thread, reason)
+	local wait = rawget(_G, "WaitThread")
+	if type(wait) ~= "function" then return false end
+	wait(thread, LIST_REFRESH_WAIT_MS)
+	local is_valid = rawget(_G, "IsValidThread")
+	local finished = type(is_valid) ~= "function" or is_valid(thread) ~= true
+	if finished ~= true then
+		log("INFO", "Left an image worker running rather than blocking the browser", {
+			reason = reason,
+			wait_ms = LIST_REFRESH_WAIT_MS,
+		})
+	end
+	return finished
+end
+
 -- Queue vanilla's normal thumbnail/screenshots work. If an entry-update path
--- could not synchronously install the current thumbnail, wait for a tracked
--- current-thumbnail worker before returning.
+-- could not synchronously install the current thumbnail, wait briefly for a
+-- tracked current-thumbnail worker before returning.
 function RestoreModDetails.CorrectedSchedule(mod, ...)
 	local result = call_schedule_original(mod, ...)
 	local record = mod and Hooks.modified[mod]
@@ -1286,11 +1370,11 @@ function RestoreModDetails.CorrectedSchedule(mod, ...)
 		local generation = Hooks.generation
 		local thread = CreateRealTimeThread(function(target, token)
 			local ok, report, failure = pcall(Hooks.worker_fn, target, Hooks,
-				false, token, false, true)
+				false, token, false, false)
 			worker_finished(ok, report, failure)
 		end, mod, generation)
 		Hooks.workers[thread] = true
-		WaitThread(thread)
+		wait_for_worker(thread, "schedule")
 	end
 	if result[1] ~= true then error(result[2]) end
 	return table.unpack(result, 2)
@@ -1331,11 +1415,11 @@ function RestoreModDetails.CorrectedDownload(mod, ...)
 		local generation = Hooks.generation
 		local thread = CreateRealTimeThread(function(target, token)
 			local ok, report, failure = pcall(Hooks.worker_fn, target, Hooks,
-				false, token, false, true)
+				false, token, false, false)
 			worker_finished(ok, report, failure)
 		end, mod, generation)
 		Hooks.workers[thread] = true
-		WaitThread(thread)
+		wait_for_worker(thread, "download")
 	end
 	release_notification_gate(mod, true)
 	if result[1] ~= true then error(result[2]) end
@@ -1516,6 +1600,8 @@ function RestoreModDetails.RestoreHook(reason)
 	local fields_ok = RestoreModDetails.RestoreModifiedEntries(reason)
 	local gates_ok = RestoreModDetails.ReleaseNotificationGates(true)
 	local files_ok = RestoreModDetails.CleanupOwnedFiles(reason)
+	-- The cached files have just been deleted, so the map must go with them.
+	Hooks.file_cache = {}
 	if rawget(_G, RETRIEVE_FN) == Hooks.wrapper then
 		ModsUIRetrieveModDetails = Hooks.original
 	end

@@ -533,6 +533,10 @@ When enabled, Repair Mod Manager Browser must:
    `WaitDownloadModScreenshots` so it fetches the current thumbnail before a
    newly loaded Browse All or Installed Mods entry first renders, while
    preserving vanilla's queued work and suppressing its stale-cache refresh.
+   A list refresh must wait only a bounded moment for that fetch: vanilla
+   rebuilds every visible row whenever the list is shown, so an unbounded wait
+   stalls the browser. Past the deadline the worker completes in the background
+   and refreshes its own entry.
    It must also prepare current screenshots before `ModsUISetDialogMode` opens
    details, allowing the existing selector below the main image to spawn and
    retain its vanilla click-to-select behavior.
@@ -545,7 +549,12 @@ When enabled, Repair Mod Manager Browser must:
 4. Download the current full response's `DisplayImagePath` for detail and list
    entries plus every valid `Screenshots[].Image` in API order, using
    cache-revalidation headers and unique fix-owned files without deleting or
-   overwriting the vanilla cache. Populate `ScreenshotPaths` atomically before
+   overwriting the vanilla cache. A browser row must read that URL from the list
+   response the game already built rather than issuing a detail request per row,
+   and a URL downloaded within the last few minutes must be reused from disk
+   instead of fetched again. A response that says nothing about screenshots
+   leaves `ScreenshotPaths` untouched; only one that describes them may replace
+   it. Populate `ScreenshotPaths` atomically before
    the first detail render, then refresh with `ModUI_Entry:ObjModified()`.
    Vanilla's unfinished screenshot branch is never repaired or run: its URL list
    is withheld for the duration of the captured call only.
@@ -827,8 +836,9 @@ the engine's item-selection translation assertion.
 - [ ] Repair Mod Manager Browser declares the missing `ModUI_Entry.ScreenshotUrls`
       field so a mod that has screenshots no longer asserts on the assignment;
       refreshes thumbnails in Browse All, Installed Mods,
-      and the selected mod from current full-detail responses before their first
-      populated render without flashing the stale cache; withholds raw detail
+      and the selected mod from current responses before their first
+      populated render without flashing the stale cache, and without the browser
+      stalling while a list of rows refreshes; withholds raw detail
       text until HTML or Steam BBCode has been formatted at 20 points with
       visible bold, Unicode arrows/symbols/emoji, website-style paragraph/list
       spacing, and clickable HTTP/HTTPS links; and displays API screenshots in
@@ -1024,7 +1034,9 @@ the engine's item-selection translation assertion.
     text, separated paragraphs, indented/spaced lists, and clickable links have
     been formatted. Confirm every screenshot thumbnail appears in API order
     directly below the main image and clicking each one replaces the large image,
-    with no `Creating a new key 'ScreenshotUrls'` assertion in the log.
+    with no `Creating a new key 'ScreenshotUrls'` assertion in the log. Leave the
+    mod page, and confirm the list returns without the screen freezing, both on
+    the first visit and on an immediate second one.
     While another retrieval is active, disable the fix and confirm the worker
     stops, the exact pre-fix description, thumbnail, screenshot URL/path fields,
     and missing-field declaration return, the page refreshes,
