@@ -10,7 +10,9 @@
 --
 -- Descriptor contract (see templates/smrcf_restore_TEMPLATE.lua):
 --   id              string, unique, permanent - the saved-settings key
---   number          integer, unique, permanent - the number shown in the panel
+--   number          integer, unique - the row number shown in the panel. Every
+--                   shipped fix leaves it out, so the rows are numbered by list
+--                   position and removing a fix renumbers the ones after it.
 --   beta            boolean
 --   versions        { ["1.0.7"] = true }
 --   default_enabled boolean

@@ -180,7 +180,7 @@ the selected version.
 6. The version catalog remains data-driven so additional verified game versions
    can be added later without redesigning the selector or persistence model.
 7. The panel has a scrollable list suitable for future fixes. Each row's narrow
-   left column contains a real square checkbox, its zero-padded permanent number,
+   left column contains a real square checkbox, its zero-padded row number,
    and, while that fix is under testing, a **[Beta]** badge. The displayed order
    is checkbox, number, then optional badge, such as **003 [Beta]**. The right
    column stacks only the unnumbered fix title above its explanation, following
@@ -217,13 +217,13 @@ the selected version.
     the next affected action. No module may guess at or reconstruct irreversible
     history that vanilla did not save.
 14. Each bug is a self-registering module whose single `smrcf_restore_*.lua` script
-    owns its permanent number, id, supported versions, default, beta status,
+    owns its id, supported versions, default, beta status,
     unnumbered plain-text title and description, own diagnostic flag (`debug`),
     runtime enable/disable function, reload-safe quiesce callback, event
     callbacks, and repair implementation. The framework file must not name an
     individual bug. If a module and its engine-required `metadata.lua`/`items.lua`
     load-list entries are removed, its row and behavior disappear automatically
-    while all remaining bugs keep their permanent numbers and continue to work.
+    while all remaining bugs continue to work and renumber to close the gap.
     Titles and explanations are plain strings; the UI renders them, and the
     zero-padded `number`, with `Translate=false`, so no fix has to allocate
     localization ids. The framework invokes the quiesce callback before it adopts
@@ -490,7 +490,7 @@ When enabled, Restore Clustered Lights must:
 
 Number 015, Restore Mod Screenshots, was merged into this fix in mod version 13.
 Both repaired the same detail path, and either one alone left the other's
-symptom visible; 015's number is retired and never reused.
+symptom visible, and the catalog renumbered to close the gap.
 
 The v1.0.7 detail-page retrieval passes a mod description through the limited
 `HTMLParser` (`CommonLua\UI\ModManager.lua:740-743`). That parser deliberately
@@ -694,7 +694,8 @@ the engine's item-selection translation assertion.
       open, filters the current version's rows case-insensitively against their
       visible labels and descriptions, and updates the shown count. Clear restores
       all rows for the current version.
-- [ ] All fifteen permanent numbers appear in the left column for `1.0.7`; the
+- [ ] All fifteen row numbers appear in the left column for `1.0.7`, running
+      from **001** with no gaps; the
       last thirteen are followed by a separate **[Beta]** badge. All right-column
       titles are unnumbered.
 - [ ] Changing the version filter rebuilds the visible rows immediately, **All**
@@ -724,8 +725,9 @@ the engine's item-selection translation assertion.
 - [ ] On a disposable copy, remove one bug script and its two engine-required
       load-list entries. The removed bug has no row, preference initialization,
       lifecycle callback, or runtime behavior; the other bug still
-      loads and retains its permanent number (for example, Restore Disasters
-      remains **001** when Restore Rains is absent).
+      loads, and the rows renumber from **001** without a gap (for example,
+      Restore Disasters remains **001** when Restore Rains is absent, and every
+      later fix moves up one).
 - [ ] Restore Rains defaults enabled on first use and persists its choice.
 - [ ] Restore Disasters defaults enabled on first use and persists its choice.
 - [ ] Restore Dust Devils, Restore Asteroid Visits, Restore Soil Overlay,
@@ -884,7 +886,7 @@ the engine's item-selection translation assertion.
    `15 shown / 15 total / <n> selected` and updates with staged checkbox changes;
    and no numeric fix count appears below the list.
 9. Open the checklist and confirm all fifteen rows render: checkbox, number,
-   `[Beta]` badge on 003-016, then the plain-text title above its explanation. No
+   `[Beta]` badge on 003-015, then the plain-text title above its explanation. No
    `Translate` assertion or missing-text row may appear, and no forecast box or
    diagnostic overlay may appear anywhere during play.
 10. Toggle Restore Disasters off and press Apply; confirm vanilla behavior returns
@@ -928,8 +930,8 @@ the engine's item-selection translation assertion.
     assertion occurred with Restore Clustered Lights enabled and disabled.
 24. On a disposable mod copy, remove `Code/smrcf_restore_rains.lua` and its matching
     `metadata.lua` and `items.lua` entries, reload the mod, and confirm the panel
-    contains the fourteen remaining fixes, **001** remains beside Restore Disasters'
-    checkbox, and no load error occurs.
+    contains the fourteen remaining fixes numbered **001** to **014** with no gap,
+    **001** remains beside Restore Disasters' checkbox, and no load error occurs.
 25. Reopen the checklist and confirm Search is blank and Game version visibly
     reads `1.0.7`. Search for text unique to Restore Rains and Restore Disasters;
     confirm the visible rows and shown count update case-insensitively. Press

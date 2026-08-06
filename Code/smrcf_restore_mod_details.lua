@@ -44,7 +44,6 @@
 
 local FIX = {
 	id = "restore_mod_details",
-	number = 16,
 	beta = true,
 	versions = { ["1.0.7"] = true },
 	default_enabled = false,

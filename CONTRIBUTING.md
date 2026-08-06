@@ -72,7 +72,7 @@ local FIX = {
     set_enabled = fn(enabled, reason),  -- your repair; idempotent both ways
 
     -- optional: the framework fills in any you omit
-    number = 15,                        -- default: next free number
+    number = 15,                        -- default: the next row number
     beta = true,                        -- default: true
     versions = { ["1.0.7"] = true },    -- default: current target version
     default_enabled = false,            -- default: false
@@ -84,8 +84,11 @@ local FIX = {
 ```
 
 The defaults are the safe ones: a fix that says nothing is beta, off, silent and
-scoped to the current target version. Pin `number` if you want a fixed row
-position, as all shipped fixes do.
+scoped to the current target version. Leave `number` out, as every shipped fix
+does: it is only the row's position in the panel, and the framework counts it
+from the load list, so removing a fix renumbers the rest instead of leaving a
+gap. `id` is the one thing that must never change once released — it is the key
+the player's choice is saved under.
 
 `set_enabled` obeys unconditionally. The framework decides *whether* a fix runs
 (master switch, version gate, player's checkbox); your file decides *what*
@@ -292,7 +295,7 @@ reaches every subscriber's game.
 * Triggers on a precise condition, not a broad "if something looks wrong".
 * Disable reinstalls the exact captured function; errors are reported, not
   swallowed.
-* `id` and `number` set; `beta = true`, `default_enabled = false`, `debug = false`.
+* `id` set and no `number`; `beta = true`, `default_enabled = false`, `debug = false`.
 
 `DESCRIPTION.md` holds the full mod requirements, the per-fix behavior
 specifications and the manual test steps.

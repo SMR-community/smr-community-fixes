@@ -20,7 +20,7 @@ Open the checklist from:
 Main Menu -> Options -> SMR Community Fixes
 ```
 
-The panel lists every fix with a checkbox, its permanent number, and a `[Beta]`
+The panel lists every fix with a checkbox, its row number, and a `[Beta]`
 badge where the fix is still being tested. Changes stay staged until you press
 **Apply**; **Back** and **Escape** discard them. Your choices persist between
 sessions.
@@ -50,11 +50,11 @@ default. The two stable fixes ship **on**.
 | 012 | Restore Localized UI Text | Beta | Uses the game's existing official translations for the terraforming heading and the Universal Rocket's Back to Earth action. |
 | 013 | Restore Track Demolition | Beta | Completes terminal track-element demolition and removes invalid Track remnants already stored in existing savegames. |
 | 014 | Restore Clustered Lights | Beta | Stops night lights entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion. |
-| 016 | Restore Mod Details | Beta | Shows the Paradox Mods screenshots vanilla never displays, alongside current thumbnails and already-formatted 20-point HTML/Steam descriptions, including Unicode, emoji, visible bold, lists, and links. |
+| 015 | Restore Mod Details | Beta | Shows the Paradox Mods screenshots vanilla never displays, alongside current thumbnails and already-formatted 20-point HTML/Steam descriptions, including Unicode, emoji, visible bold, lists, and links. |
 
-Numbers are permanent and never reused, so a fix keeps its number even if
-another is removed. That is why 015 is missing: Restore Mod Screenshots repaired
-the same detail path as 016 and was merged into it, and its number is retired.
+The number is just the row's position in the list, so the list always runs from
+001 with no gaps. Remove a fix and everything below it moves up a number; only
+the fix's name and its saved on/off choice stay put.
 
 ## How it is built
 

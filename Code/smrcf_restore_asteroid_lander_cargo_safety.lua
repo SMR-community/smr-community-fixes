@@ -17,7 +17,8 @@
 -- What this fix is, as data. SMRCommunityFixes.lua reads this table and needs nothing
 -- else from this file.
 --   id              the key the player's on/off choice is saved under - permanent
---   number          the row number shown in the checklist - permanent, never reused
+--   number          left out on purpose: the framework numbers the rows by
+--                   list position, so removing a fix renumbers the rest
 --   beta            true while the fix still needs testing in real games
 --   versions        the game versions this repair was verified against
 --   default_enabled whether a fresh install starts with it on
@@ -25,7 +26,6 @@
 --   label/description  plain text for the checklist row (rendered untranslated)
 local FIX = {
 	id = "restore_asteroid_lander_cargo_safety",
-	number = 11,
 	beta = true,
 	versions = { ["1.0.7"] = true },
 	default_enabled = false,
