@@ -5,8 +5,7 @@ name: Publish to Paradox Mods
 #
 # Authentication is the PDX_REFRESH repository secret: a Paradox refresh token,
 # exchanged for a session token at the start of every run. No password is
-# stored. Note that any organisation member who can push a workflow can read
-# that secret, so it should belong to a dedicated publishing account.
+# stored, and PDX_REFRESH should belong to a dedicated publishing account.
 #
 # The mod page's own text - display name, short and long description - is read
 # back from Paradox and republished unchanged, because the service requires all
