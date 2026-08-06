@@ -532,8 +532,9 @@ When enabled, Restore Mod Details must:
    fetches current full details before a newly loaded Browse All or Installed
    Mods entry first renders, while preserving vanilla's queued work.
 2. Parse `PdxModDetails.LongDescription` with a private parser instance that
-   retains headings, uses a fix-owned visibly bold Noto text style, separates
-   paragraphs and lists like the website, spaces and indents bullets/numbers,
+   retains headings, renders the entire description at 20 points, uses a
+   fix-owned visibly bold Noto text style, separates paragraphs and lists like
+   the website, spaces and indents bullets/numbers,
    preserves common rich-text tags, and emits clickable `OpenUrl` markup only
    for safe HTTP/HTTPS anchors. It must not change the global `HTMLParser` class.
 3. Download the current full response's `DisplayImagePath` for detail and list
@@ -812,8 +813,8 @@ the engine's item-selection translation assertion.
       one timed correction event for each altered delayed transition.
 - [ ] Restore Mod Details refreshes thumbnails in Browse All, Installed Mods,
       and the selected mod from current full-detail responses before their first
-      populated render; renders visibly bold text, website-style paragraph/list
-      spacing, and clickable HTTP/HTTPS links;
+      populated render; renders the description at 20 points with visibly bold
+      text, website-style paragraph/list spacing, and clickable HTTP/HTTPS links;
       and does not alter the vanilla cache or global HTML parser. Disabling during
       and after retrieval cancels its work, restores only fields, styles, and
       wrappers it still owns, deletes every file it created, preserves later

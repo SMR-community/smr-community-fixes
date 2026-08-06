@@ -38,6 +38,7 @@ local FIX = {
 local RETRIEVE_FN = "ModsUIRetrieveModDetails"
 local DOWNLOAD_FN = "WaitDownloadModScreenshots"
 local SCHEDULE_FN = "ModsUIDownloadScreenshots"
+local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
 
 -- Runs in the game environment, not this mod's restricted environment.
@@ -184,7 +185,7 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		output = output:gsub(list_close_mark, "\n\n")
 		output = output:gsub(item_mark, "\n")
 		output = output:gsub("\n\n\n+", "\n\n")
-		return output
+		return "<style " .. hooks.body_style_id .. ">" .. output .. "</style>"
 	end
 
 	local raw_description = details.LongDescription
@@ -320,12 +321,12 @@ local previous_hooks = type(shared) == "table" and shared.SMRCF_ModDetailsHooks 
 local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
-	Hooks.protocol = 2
+	Hooks.protocol = 3
 	Hooks.worker_fn = nil
 	Hooks.cleanup_fn = nil
 else
 	Hooks = {
-		protocol = 2,
+		protocol = 3,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -341,6 +342,9 @@ else
 		modified = setmetatable({}, { __mode = "k" }),
 		owned_paths = {},
 		next_file = 0,
+		body_style_id = BODY_STYLE_ID,
+		body_style = false,
+		body_style_original = nil,
 		bold_style_id = BOLD_STYLE_ID,
 		bold_style = false,
 		bold_style_original = nil,
@@ -351,6 +355,7 @@ Hooks.modified = Hooks.modified or setmetatable({}, { __mode = "k" })
 Hooks.owned_paths = Hooks.owned_paths or {}
 Hooks.download_original = Hooks.download_original or rawget(_G, DOWNLOAD_FN)
 Hooks.schedule_original = Hooks.schedule_original or rawget(_G, SCHEDULE_FN)
+Hooks.body_style_id = BODY_STYLE_ID
 Hooks.bold_style_id = BOLD_STYLE_ID
 
 local current = rawget(_G, RETRIEVE_FN)
@@ -462,7 +467,10 @@ end
 
 local function clear_bold_style_cache()
 	local cache = rawget(_G, "TextStyleCache")
-	if type(cache) == "table" then cache[BOLD_STYLE_ID] = nil end
+	if type(cache) == "table" then
+		cache[BODY_STYLE_ID] = nil
+		cache[BOLD_STYLE_ID] = nil
+	end
 end
 
 function RestoreModDetails.InstallBoldStyle()
@@ -473,46 +481,80 @@ function RestoreModDetails.InstallBoldStyle()
 		log("ERROR", "TextStyle API unavailable; cannot install rich bold text")
 		return false
 	end
-	local current = styles[BOLD_STYLE_ID]
-	if Hooks.bold_style and current == Hooks.bold_style then return true end
-	if Hooks.bold_style and current ~= Hooks.bold_style then
+	local body_current = styles[BODY_STYLE_ID]
+	local bold_current = styles[BOLD_STYLE_ID]
+	if Hooks.body_style and body_current ~= Hooks.body_style then
+		log("ERROR", "A later text style owns the fix's body style id; leaving it unchanged", {
+			style = BODY_STYLE_ID,
+		})
+		return false
+	end
+	if Hooks.bold_style and bold_current ~= Hooks.bold_style then
 		log("ERROR", "A later text style owns the fix's style id; leaving it unchanged", {
 			style = BOLD_STYLE_ID,
 		})
 		return false
 	end
 	local base = styles.ModsUIDetailsDescription
-	Hooks.bold_style_original = current
-	local owned = text_style:new({
-		id = BOLD_STYLE_ID,
-		group = "ModsUI",
-		FontName = base and base.FontName or "Noto Sans Regular",
-		FontSize = base and base.FontSize or 26,
-		TextColor = base and base.TextColor or RGB(26, 26, 26),
-		RolloverTextColor = base and base.RolloverTextColor or RGB(26, 26, 26),
-		DisabledTextColor = base and base.DisabledTextColor or RGB(26, 26, 26),
-		DisabledRolloverTextColor = base and base.DisabledRolloverTextColor or RGB(26, 26, 26),
-		-- Relaunched ships no bold face for its Noto UI font. A one-pixel
-		-- same-color outline preserves Noto's metrics and produces real visible
-		-- emphasis instead of silently falling back to the regular face.
-		ShadowType = "outline",
-		ShadowSize = 1,
-		ShadowColor = base and base.TextColor or RGB(26, 26, 26),
-		ShadowDir = point(0, 0),
-	})
-	Hooks.bold_style = owned
-	styles[BOLD_STYLE_ID] = owned
+	if not Hooks.body_style then
+		Hooks.body_style_original = body_current
+		Hooks.body_style = text_style:new({
+			id = BODY_STYLE_ID,
+			group = "ModsUI",
+			FontName = base and base.FontName or "Noto Sans Regular",
+			FontSize = 20,
+			TextColor = base and base.TextColor or RGB(26, 26, 26),
+			RolloverTextColor = base and base.RolloverTextColor or RGB(26, 26, 26),
+			DisabledTextColor = base and base.DisabledTextColor or RGB(26, 26, 26),
+			DisabledRolloverTextColor = base and base.DisabledRolloverTextColor or RGB(26, 26, 26),
+			ShadowType = base and base.ShadowType or "shadow",
+			ShadowSize = base and base.ShadowSize or 0,
+			ShadowColor = base and base.ShadowColor or 0,
+			ShadowDir = base and base.ShadowDir or point(1, 1),
+		})
+	end
+	if not Hooks.bold_style then
+		Hooks.bold_style_original = bold_current
+		Hooks.bold_style = text_style:new({
+			id = BOLD_STYLE_ID,
+			group = "ModsUI",
+			FontName = base and base.FontName or "Noto Sans Regular",
+			FontSize = 20,
+			TextColor = base and base.TextColor or RGB(26, 26, 26),
+			RolloverTextColor = base and base.RolloverTextColor or RGB(26, 26, 26),
+			DisabledTextColor = base and base.DisabledTextColor or RGB(26, 26, 26),
+			DisabledRolloverTextColor = base and base.DisabledRolloverTextColor or RGB(26, 26, 26),
+			-- Relaunched ships no bold face for its Noto UI font. A one-pixel
+			-- same-color outline preserves Noto's metrics and produces real visible
+			-- emphasis instead of silently falling back to the regular face.
+			ShadowType = "outline",
+			ShadowSize = 1,
+			ShadowColor = base and base.TextColor or RGB(26, 26, 26),
+			ShadowDir = point(0, 0),
+		})
+	end
+	styles[BODY_STYLE_ID] = Hooks.body_style
+	styles[BOLD_STYLE_ID] = Hooks.bold_style
 	clear_bold_style_cache()
 	return true
 end
 
 function RestoreModDetails.RestoreBoldStyle(reason)
 	local styles = rawget(_G, "TextStyles")
+	local restored = false
+	if type(styles) == "table" and Hooks.body_style and
+		styles[BODY_STYLE_ID] == Hooks.body_style then
+		styles[BODY_STYLE_ID] = Hooks.body_style_original
+		restored = true
+	end
 	if type(styles) == "table" and Hooks.bold_style and
 		styles[BOLD_STYLE_ID] == Hooks.bold_style then
 		styles[BOLD_STYLE_ID] = Hooks.bold_style_original
-		clear_bold_style_cache()
+		restored = true
 	end
+	if restored then clear_bold_style_cache() end
+	Hooks.body_style = false
+	Hooks.body_style_original = nil
 	Hooks.bold_style = false
 	Hooks.bold_style_original = nil
 	return true
