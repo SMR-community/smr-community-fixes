@@ -164,7 +164,7 @@ the selected version.
    game version: each one appears only under the versions it was confirmed on,
    declared in its `versions` table, so every game version has its own list and
    no repair runs against a build nobody verified it against. Version `1.0.7`
-   contains Restore Rains, Restore Disasters, and thirteen default-off beta fixes.
+   contains Restore Rains, Restore Disasters, and fourteen default-off beta fixes.
    The dropdown contains **All** and **1.0.7**, defaults to `1.0.7` whenever the
    panel opens, and filters only the displayed rows; **All** never changes the
    active runtime target. Later verified versions are added to the data-driven
@@ -511,6 +511,43 @@ When enabled, Restore Mod Screenshots must:
 5. Default disabled and emit a timed `Bug fix invoked:` event once per enable,
    only when it actually adds the missing declaration.
 
+## 5O. [Beta] Restore Mod Details behavior
+
+The v1.0.7 detail-page retrieval passes a mod description through the limited
+`HTMLParser` (`CommonLua\UI\ModManager.lua:740-743`). That parser deliberately
+turns anchors into inert `label [URL]` text and discards the contents of HTML
+tags it does not recognize (`CommonLua\X\HTMLParser.lua:67-143`), even though
+`ModsUIModDetails` already handles `OpenUrl` hyperlinks. Thumbnail downloads
+also reuse a cache name made only from ModID and PreferredVersion
+(`CommonLua\Libs\Paradox\ParadoxMods.lua:218-245`), so replacing an image
+without publishing a new mod version leaves the old thumbnail on the detail
+page.
+
+When enabled, Restore Mod Details must:
+
+1. Remain one fix for both symptoms: call the captured
+   `ModsUIRetrieveModDetails` first, then post-process only the selected mod
+   after vanilla's detail-retrieval thread finishes. It may also wrap the
+   captured `WaitDownloadModScreenshots` solely to prevent an already queued
+   vanilla browse-list download from overwriting the fresh detail thumbnail.
+2. Parse `PdxModDetails.LongDescription` with a private parser instance that
+   retains vanilla headings, paragraphs, bold text and lists, preserves the
+   contents of common rich-text tags, and emits clickable `OpenUrl` markup only
+   for safe HTTP/HTTPS anchors. It must not change the global `HTMLParser` class.
+3. Download `PdxModDetails.DisplayImagePath` on every detail retrieval with
+   cache-revalidation headers into a unique fix-owned file, without deleting or
+   overwriting the vanilla screenshot/thumbnail cache, then refresh the open UI
+   with `ModUI_Entry:ObjModified()`.
+4. Keep reload-safe ownership records for every `LongDescription`, `Thumbnail`,
+   worker and file it changes. Disabling or quiescing must first close the gate
+   and cancel its workers, restore a field only while it still equals this fix's
+   installed value, refresh restored entries, delete only fix-owned files, and
+   restore each exact captured function only while the fix still owns its global.
+   A later third-party field value or wrapper must be preserved.
+5. Remain idempotent across repeated enable/disable and Lua reload, keep no saved
+   object or marker, default disabled, and emit one timed `Bug fix invoked:`
+   event for each selected-mod detail refresh that it actually changes.
+
 ## 6. Configuration and persistence
 
 Framework configuration lives in the local `Config` table inside
@@ -534,7 +571,7 @@ version constant.
 
 Each fix owns its own default and its own diagnostic flag inside its descriptor:
 `default_enabled` (true for Restore Rains and Restore Disasters, false for the
-thirteen betas) and `debug = false` for the publish build. A fix's inline logger
+fourteen betas) and `debug = false` for the publish build. A fix's inline logger
 emits Info only while its own `debug` is true; `ERROR` is never gated. Setting
 `Config.DEBUG_LOGS = true` also turns on every fix's `debug` when the framework
 adopts the registry, which produces a full diagnostic build in one edit.
@@ -586,6 +623,8 @@ Restore Disasters description: Removes stale completed-meteor-storm state that c
 [Beta] Restore Track Demolition description: Completes v1.0.7 terminal track-element demolition and removes exact invalid Track shells already stored in existing savegames.
 [Beta] Restore Clustered Lights title: Restore Clustered Lights
 [Beta] Restore Clustered Lights description: Prevents v1.0.7 night lights from entering the renderer in a compressed staggered burst that can trigger the clustered-light assertion.
+[Beta] Restore Mod Details title: Restore Mod Details
+[Beta] Restore Mod Details description: Loads each mod's current thumbnail and preserves rich description formatting with clickable links in the Paradox Mods browser.
 Select group button: Select group
 Unselect group button: Unselect group
 Apply button: Apply
@@ -642,8 +681,8 @@ the engine's item-selection translation assertion.
       open, filters the current version's rows case-insensitively against their
       visible labels and descriptions, and updates the shown count. Clear restores
       all rows for the current version.
-- [ ] All fifteen permanent numbers appear in the left column for `1.0.7`; the
-      last thirteen are followed by a separate **[Beta]** badge. All right-column
+- [ ] All sixteen permanent numbers appear in the left column for `1.0.7`; the
+      last fourteen are followed by a separate **[Beta]** badge. All right-column
       titles are unnumbered.
 - [ ] Changing the version filter rebuilds the visible rows immediately, **All**
       does not change the active `1.0.7` runtime target, and reopening the panel
@@ -768,6 +807,12 @@ the engine's item-selection translation assertion.
       calls to delay zero, leaves instant refreshes and `NightLightsOff()`
       unchanged, restores the exact captured function when disabled, and emits
       one timed correction event for each altered delayed transition.
+- [ ] Restore Mod Details refreshes the selected mod from the full-detail
+      response, displays its current thumbnail, preserves rich description text
+      with clickable HTTP/HTTPS links, and does not alter the vanilla cache or
+      global HTML parser. Disabling during and after retrieval cancels its work,
+      restores only fields and the wrapper it still owns, deletes every file it
+      created, preserves later third-party changes, and refreshes the open page.
 - [ ] `metadata.lua` code order and `items.lua` entries match files on disk.
 - [ ] All Lua files pass available parse checks.
 - [ ] The payload deployed to the local Mods folder includes metadata, items,
@@ -795,7 +840,7 @@ the engine's item-selection translation assertion.
    Confirm the **SMR Community Fixes** display title is slightly larger than **Search:**
    while retaining its earlier blue-gray color.
 4. If persistent storage previously selected `unsupported`, reopen the checklist
-   and confirm it now normalizes to `1.0.7` with all fifteen fix rows available.
+   and confirm it now normalizes to `1.0.7` with all sixteen fix rows available.
 5. Select **All** and confirm all catalog rows are shown without changing the
    active runtime target. Close and reopen the panel and confirm the filter
    defaults back to `1.0.7`.
@@ -803,7 +848,7 @@ the engine's item-selection translation assertion.
    confirm it is still enabled. Repeat using Escape.
 7. Toggle Restore Rains off, press Apply, and confirm the panel stays open and
    shows it disabled. Close and reopen the panel and confirm it persisted.
-8. Stage changes to all fifteen fixes, press Apply, and confirm they commit together.
+8. Stage changes to all sixteen fixes, press Apply, and confirm they commit together.
    Confirm the first two left columns show checkbox + **001** and checkbox +
    **002**, while their right-column titles are **Restore Disasters** and
    **Restore Rains** under both filters. Confirm each beta row shows checkbox +
@@ -815,10 +860,10 @@ the engine's item-selection translation assertion.
    returns to `1.0.7`, and every checkbox is cleared, the two stable fixes
    included; the summary then reads `0 selected`. Confirm the footer order is Select group, Unselect
    group, Apply, Reset, Back; all labels are centered; the toolbar summary reads
-   `14 shown / 14 total / <n> selected` and updates with staged checkbox changes;
+   `16 shown / 16 total / <n> selected` and updates with staged checkbox changes;
    and no numeric fix count appears below the list.
-9. Open the checklist and confirm all fifteen rows render: checkbox, number,
-   `[Beta]` badge on 003-014, then the plain-text title above its explanation. No
+9. Open the checklist and confirm all sixteen rows render: checkbox, number,
+   `[Beta]` badge on 003-016, then the plain-text title above its explanation. No
    `Translate` assertion or missing-text row may appear, and no forecast box or
    diagnostic overlay may appear anywhere during play.
 10. Toggle Restore Disasters off and press Apply; confirm vanilla behavior returns
@@ -862,18 +907,18 @@ the engine's item-selection translation assertion.
     assertion occurred with Restore Clustered Lights enabled and disabled.
 24. On a disposable mod copy, remove `Code/smrcf_restore_rains.lua` and its matching
     `metadata.lua` and `items.lua` entries, reload the mod, and confirm the panel
-    contains the fourteen remaining fixes, **001** remains beside Restore Disasters'
+    contains the fifteen remaining fixes, **001** remains beside Restore Disasters'
     checkbox, and no load error occurs.
 25. Reopen the checklist and confirm Search is blank and Game version visibly
     reads `1.0.7`. Search for text unique to Restore Rains and Restore Disasters;
     confirm the visible rows and shown count update case-insensitively. Press
-    Clear and confirm all fifteen rows return. Confirm the slim right scrollbar
-    appears for the fifteen-row catalog, mouse-wheel and thumb scrolling reach the
+    Clear and confirm all sixteen rows return. Confirm the slim right scrollbar
+    appears for the sixteen-row catalog, mouse-wheel and thumb scrolling reach the
     last row, and the bar auto-hides after filtering the list down to rows that
     fit. Confirm the viewport shows five rows simultaneously when those five
     descriptions each fit on one line. Repeat at a second resolution or UI-scale
     setting and confirm the viewport remains 60% of the active desktop height.
-26. On a disposable v1.0.7 game, confirm all thirteen **[Beta]** rows start
+26. On a disposable v1.0.7 game, confirm all fourteen **[Beta]** rows start
     unchecked. Enable Restore Dust Devils, use a non-100% Dust Devil preset, and
     confirm each natural opportunity performs a percentage roll followed by an
     integer spawn count only on success. Switch to another map during a cycle and
@@ -945,7 +990,15 @@ the engine's item-selection translation assertion.
     `atomic_night_light_turn_on` correction for each positive-delay transition.
     Disable the fix and confirm the captured `NightLightsOn()` function is
     restored and no correction event is emitted on the next transition.
-38. On disposable copies of existing v1.0.7 saves, enable each applicable fix,
+38. Enable Restore Mod Details and browse a mod whose thumbnail was replaced
+    without a version bump and whose description contains headings, bold or
+    italic text, lists, and HTTP/HTTPS links. Confirm the current thumbnail is
+    downloaded and the rich text and clickable links render on the detail page.
+    While another retrieval is active, disable the fix and confirm the worker
+    stops, the exact pre-fix description and thumbnail return, the page refreshes,
+    and no `SMRCFModDetails_*` file remains in AppData. Repeat after installing a
+    later wrapper/field value and confirm that third-party value is preserved.
+39. On disposable copies of existing v1.0.7 saves, enable each applicable fix,
     let its reconciliation or next guarded interaction run, then disable that fix,
     save, and reload. Repeat once with the whole mod disabled after the repairs.
     Confirm both saves load under vanilla behavior and contain no dependency on a
@@ -960,7 +1013,7 @@ Phase 1 (community release): one framework file plus one self-contained file per
                         fix; dedicated SMR Community Fixes checklist with panel-local
                         version filter and staged persistent toggles; Restore
                         Rains scheduler/state/Cloud Seeding repair; Restore
-                        Disasters meteor-state cleanup; and thirteen explicitly
+                        Disasters meteor-state cleanup; and fourteen explicitly
                         labeled default-off v1.0.7 beta fixes.
 Future phases:          add only independently verified v1.0.7 fixes, each as one
                         new self-contained file. Anything that is neither the
