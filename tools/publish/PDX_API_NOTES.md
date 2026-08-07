@@ -90,6 +90,37 @@ The mod UUID that step 3 needs is `modDetail.name` from step 2 — not `modName`
 and not a top-level field. `DELETE /accounts/sessions/{game}` logs out and is
 not used.
 
+## The content payload is not a zip of loose files
+
+The uploaded zip's root must hold `ModContent.fpk`, an FLPK archive the engine
+mounts directly. Every mod served by Paradox has that shape (see any
+`AppData/PdxMods/pdx_<id>_<ver>/` folder), and the game's installer SKIPS a
+downloaded mod without it — `PdxGetInstalledMods("require_fpk")` — which shows
+up to the player as the mod endlessly failing to download. A zip of
+`metadata.lua`/`Code/...` uploads fine and the version goes live, but nobody
+can install it. That is exactly what this workflow shipped before v17.
+
+The in-game uploader never hits this because `CreatePackageForUpload` calls
+the native `AsyncPack` first. `flpk.py` in this folder is a byte-exact
+reimplementation of `AsyncPack` (validated against 181 real archives,
+26 chosen-plaintext archives packed by the engine itself, and an in-game
+`MountPack` read-back of its output), so CI builds `ModContent.fpk` without a
+game install and refuses to upload unless the archive round-trips back to the
+exact payload files.
+
+FLPK in one paragraph: 32-byte header (`FLPK`, 0x20, 1, 0x20, 0, toc_size,
+root_block_size, 4); a TOC of per-directory blocks (root first, then
+breadth-first), each block a preorder-serialized binary search tree over names
+(bytewise), every record carrying its left-subtree byte length so the engine
+can binary-search; records are `{u32 data_off, u16 0, u8 flags(0x01 dir /
+0x10 raw / 0x30 zstd), u8 name_len, u32 size, name, u32 left_bytes}`. The tree
+root of every span is the weighted median where a directory weighs its subtree
+FILE count. File blobs follow the TOC tightly packed; a compressed blob is
+`ZSTD | u32 raw_size | u32 chunk_size(1024) | u32 first_frag_off`, a table of
+u32 fragment offsets, then per-1KiB-chunk zstd level-3 single-segment frames
+(a chunk is stored verbatim when zstd does not shrink it; a whole file stays
+raw when the blob would not be smaller). Full details in `flpk.py`.
+
 ## The version PUT
 
 Six fields are mandatory:

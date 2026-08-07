@@ -87,15 +87,29 @@ jobs:
             exit 1
           fi
 
-      # The payload is exactly what the game loads: no docs, no templates, no
-      # tools, no workflows. Same rule as section 1 of DESCRIPTION.md.
+      # The payload the game can actually install is NOT a zip of loose files:
+      # every mod served by Paradox is a zip whose root holds ModContent.fpk,
+      # an FLPK archive the engine mounts directly, and the game's installer
+      # skips any download without it (PdxGetInstalledMods("require_fpk")).
+      # tools/publish/flpk.py is a byte-exact reimplementation of the engine's
+      # AsyncPack (validated against 181 real archives and in-game mounting),
+      # so the runner can build it without a game install.
       - name: Pack the payload
         run: |
-          mkdir -p dist
-          zip -r dist/SMRCF.zip metadata.lua items.lua Code Images -x '*.gitkeep'
+          pip install zstandard
+          python tools/publish/flpk.py selftest
+          mkdir -p dist/stage
+          cp metadata.lua items.lua dist/stage/
+          cp -r Code Images dist/stage/
+          find dist/stage -name '.gitkeep' -delete
+          python tools/publish/flpk.py pack dist/stage dist/ModContent.fpk
+          # The guard that would have caught the loose-file zip: unpack what we
+          # are about to ship and require byte-identity with the payload.
+          python tools/publish/flpk.py check dist/ModContent.fpk dist/stage
+          (cd dist && zip SMRCF.zip ModContent.fpk)
           version=$(sed -n "s/.*'version', \([0-9]\{1,\}\),.*/\1/p" metadata.lua | head -n 1)
           echo "VERSION=$version" >> "$GITHUB_ENV"
-          ls -l dist/SMRCF.zip
+          ls -l dist/ModContent.fpk dist/SMRCF.zip
 
       - name: Publish
         env:
