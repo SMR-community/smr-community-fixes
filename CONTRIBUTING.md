@@ -200,13 +200,21 @@ needs no game installed anywhere — it runs on a hosted Linux runner and talks 
 Paradox over HTTP. Merging does not publish. Pushing a version tag does:
 
 ```
-git tag v4
-git push origin v4
+git tag v17
+git push origin v17
 ```
 
 [`publish.yml`](.github/workflows/publish.yml) checks the payload, refuses the
 tag unless `'version'` in `metadata.lua` has moved, packs `metadata.lua`,
-`items.lua`, `Code\` and `Images\`, and uploads that.
+`items.lua`, `Code\` and `Images\` into `ModContent.fpk`, and uploads that.
+
+What players install is not a zip of loose files: the zip's root has to hold
+`ModContent.fpk`, the archive the engine mounts. A zip of `Code\...` uploads
+fine and the version goes live, but the installer skips it and the mod fails to
+download forever. `tools\publish\flpk.py` builds the archive on the runner — no
+game install needed — and the workflow refuses to upload unless the archive
+unpacks back to the exact payload files. `tools\publish\PDX_API_NOTES.md` has
+the format and the rest of the protocol.
 
 **You need no Paradox account.** CI authenticates from the `PDX_REFRESH` secret,
 so anyone who can push a tag can release — and it does not matter whether anyone
@@ -228,6 +236,11 @@ back and republishes it unchanged. Edit that text on Paradox, not here. The
 changelog entry comes from `'last_changes'` in `metadata.lua` and cannot be
 empty. The cover is `Images\smr_community_fixes.jpg`; no screenshots are
 published.
+
+The version's `recommendedGameVersion` is `'lua_revision'` from `metadata.lua`,
+sent as a string — the same value the game's own uploader sends. Paradox
+requires the field, and a wrong one makes the page warn players that the mod is
+incompatible with their build.
 
 ### Rehearse first
 

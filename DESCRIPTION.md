@@ -116,8 +116,24 @@ Merging never publishes. Pushing a `v*` tag runs `publish.yml`, which:
 2. refuses the tag unless `'version'` exceeds the previously tagged release,
    which would otherwise overwrite it rather than add one;
 3. packs `metadata.lua`, `items.lua`, `Code\` and `Images\` — the deployment set
-   from section 1, and nothing else;
-4. uploads it, reporting each call with status, elapsed time and attempts.
+   from section 1, and nothing else — into `ModContent.fpk`, then unpacks that
+   archive again and requires it to match the staged files byte for byte;
+4. uploads a zip whose root is that archive, reporting each call with status,
+   elapsed time and attempts.
+
+The archive is not an optimisation. Every mod Paradox serves is a zip whose root
+holds `ModContent.fpk`, and the game's installer skips a download without one
+(`PdxGetInstalledMods("require_fpk")`), which reaches the player as a mod that
+never finishes downloading. The in-game uploader avoids this by calling the
+engine's native `AsyncPack`; `tools\publish\flpk.py` is a byte-exact
+reimplementation of it, so a hosted runner can produce the same archive with no
+game install. The round-trip check in step 3 is what keeps a loose-file payload
+from shipping again.
+
+`recommendedGameVersion` on the published version is `'lua_revision'` from
+`metadata.lua` as a string — the value the in-game publisher sends. The service
+requires the field, and a wrong one makes the page warn players the mod does not
+match their build.
 
 Timeouts, connection errors, `429` and `5xx` retry with backoff; `4xx` never
 does, since a rejected request is wrong rather than unlucky. A failed tag opens

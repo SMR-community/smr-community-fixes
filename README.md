@@ -63,6 +63,7 @@ Code/SMRCommunityFixes.lua      the framework: config, logging, settings, regist
 Code/smrcf_<fix>.lua            one bug fix, completely self-contained
 templates/                      the starting point for a new fix (not shipped in the mod)
 tools/sync_mod.lua              registration and consistency checks used by CI
+tools/publish/flpk.py           packs the ModContent.fpk archive the game installs
 tools/publish/pdx_client.py     uploads to Paradox Mods; standard library only
 tools/publish/PDX_API_NOTES.md  how that undocumented API works
 ```
@@ -106,13 +107,14 @@ nobody needs the game installed to publish.
 Merging does not publish. Pushing a version tag does:
 
 ```
-git tag v4
-git push origin v4
+git tag v17
+git push origin v17
 ```
 
-That packs `metadata.lua`, `items.lua`, `Code/` and `Images/` and uploads them.
-So several fixes can land first and ship together as one release, when someone
-decides it is ready.
+That packs `metadata.lua`, `items.lua`, `Code/` and `Images/` into
+`ModContent.fpk` — the archive the game actually installs — confirms the archive
+unpacks back to those exact files, and uploads it. So several fixes can land
+first and ship together as one release, when someone decides it is ready.
 
 Anyone who can push can tag, and no Paradox account is needed — CI holds the
 credential, and nobody has to be logged in anywhere. A tag is the one action
