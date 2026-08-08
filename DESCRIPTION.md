@@ -562,9 +562,15 @@ When enabled, Repair Mod Manager Browser must:
    output in the engine's fallback-font mode; and render the entire description
    at 20 points with a fix-owned visibly bold Noto style. Before enabling that
    mode, validate every existing and proposed fallback name with
-   `UIL.GetFontID(name, 10)` and expose only names that resolve to non-negative
-   numeric ids to XText.
-   Rebuild a list installed by the older unvalidated protocol from its captured
+   `UIL.GetFontID(name, size)` at every size declared by the loaded text styles,
+   their current UI-scaled sizes, and effective sizes already materialized at
+   custom control scales. Always include the parser's size 10 and the mod's
+   20-point description size. Do not rely on v1.0.7's size-10-only glyph probe
+   because a face can pass that probe and still fail creation at another
+   renderer size. Revalidate before each Mod Manager detail retrieval, so UI-
+   scale and loaded-style changes are incorporated, and expose only names that
+   resolve to non-negative numeric ids at every relevant size to XText.
+   Rebuild a list installed by an older validation protocol from its captured
    original, so a missing face can never become font id `-1` in
    `UIL.MeasureText`. It must not change the global `HTMLParser` or `SteamParser`
    classes.

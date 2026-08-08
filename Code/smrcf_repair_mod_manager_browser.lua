@@ -52,9 +52,11 @@
 -- this fix, deletes only files this fix created, and restores the exact captured
 -- function while this wrapper still owns the global.
 --
--- Fallback font names are validated through UIL before they are exposed to
--- XText. The v1.0.7 parser can otherwise select a missing face, receive -1 from
--- GetFontHeightAndBaseline, and pass that invalid id to UIL.MeasureText.
+-- Fallback font names are validated through UIL at every loaded text-style
+-- size, including each style's current UI-scaled size, before they are exposed
+-- to XText. The v1.0.7 parser probes glyphs only at size 10 even though it later
+-- creates the selected face at the active style size; a face can pass that probe
+-- and still return -1 at another size, which is then passed to UIL.MeasureText.
 
 local FIX = {
 	id = "repair_mod_manager_browser",
@@ -75,6 +77,7 @@ local ENTRY_CLASS = "ModUI_Entry"
 local SCREENSHOT_URLS_FIELD = "ScreenshotUrls"
 local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
+local DETAILS_FONT_SIZE = 20
 local FALLBACK_FONT_NAMES = { "Segoe UI Emoji", "Segoe UI Symbol" }
 -- How long a downloaded image may be reused for the same URL, and how long a
 -- browser list refresh may block waiting for one. The wait is what keeps the
@@ -616,7 +619,7 @@ local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
 	local previous_protocol = Hooks.protocol
-	Hooks.protocol = 7
+	Hooks.protocol = 9
 	if previous_protocol ~= Hooks.protocol then
 		Hooks.fallback_fonts_validated = false
 	end
@@ -624,7 +627,7 @@ if type(previous_hooks) == "table" then
 	Hooks.cleanup_fn = nil
 else
 	Hooks = {
-		protocol = 7,
+		protocol = 9,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -657,6 +660,7 @@ else
 		fallback_fonts = false,
 		fallback_fonts_original = nil,
 		fallback_fonts_expected = false,
+		fallback_font_sizes = false,
 		fallback_fonts_validated = false,
 	}
 end
@@ -726,6 +730,9 @@ if type(Hooks.wrapper) ~= "function" then
 	Hooks.wrapper = function(...)
 		if Hooks.in_call == true then return Hooks.base_original(...) end
 		if Hooks.enabled == true and type(Hooks.impl) == "function" then
+			if type(Hooks.font_revalidate_fn) == "function" then
+				Hooks.font_revalidate_fn()
+			end
 			return Hooks.impl(...)
 		end
 		if Hooks.original_may_contain_wrapper == true then
@@ -926,6 +933,61 @@ local function same_array(left, right)
 	return true
 end
 
+local function fallback_font_sizes(uil)
+	local sizes, seen = {}, {}
+	local function add(size)
+		if type(size) ~= "number" or size < 1 then return end
+		size = math.floor(size)
+		if size < 1 or seen[size] then return end
+		seen[size] = true
+		sizes[#sizes + 1] = size
+	end
+
+	-- Size 10 is the parser's glyph probe. The details size is always relevant,
+	-- even before this fix's two styles have been installed in TextStyles.
+	add(10)
+	add(DETAILS_FONT_SIZE)
+
+	local ui_scale = 1000
+	local get_ui_scale = rawget(_G, "GetUIScale")
+	if type(get_ui_scale) == "function" then
+		local ok, scale = pcall(get_ui_scale)
+		if ok and type(scale) == "number" and scale > 0 then ui_scale = scale end
+	end
+	add(MulDivRound(DETAILS_FONT_SIZE, ui_scale, 1000))
+
+	local styles = rawget(_G, "TextStyles")
+	if type(styles) == "table" then
+		for _, style in pairs(styles) do
+			local size = type(style) == "table" and style.FontSize
+			if type(size) == "number" then
+				add(size)
+				add(MulDivRound(size, ui_scale, 1000))
+			end
+		end
+	end
+
+	-- Include effective sizes already materialized at nonstandard control scales.
+	local get_font_size = type(uil) == "table" and uil.GetFontSizeFromId
+	local cache = rawget(_G, "TextStyleCache")
+	if type(get_font_size) == "function" and type(cache) == "table" then
+		for _, by_scale in pairs(cache) do
+			if type(by_scale) == "table" then
+				for _, metrics in pairs(by_scale) do
+					local id = type(metrics) == "table" and metrics[1]
+					if type(id) == "number" then
+						local ok, size = pcall(get_font_size, id)
+						if ok then add(size) end
+					end
+				end
+			end
+		end
+	end
+
+	table.sort(sizes)
+	return sizes
+end
+
 function RestoreModDetails.InstallFallbackFonts()
 	local configuration = rawget(_G, "config")
 	local current = type(configuration) == "table" and configuration.FallbackFonts
@@ -937,12 +999,17 @@ function RestoreModDetails.InstallFallbackFonts()
 		return false
 	end
 
+	local validation_sizes = fallback_font_sizes(uil)
 	local original = current
 	if Hooks.fallback_fonts then
 		if current == Hooks.fallback_fonts and
 			same_array(current, Hooks.fallback_fonts_expected)
 		then
-			if Hooks.fallback_fonts_validated == true then return true end
+			if Hooks.fallback_fonts_validated == true and
+				same_array(Hooks.fallback_font_sizes, validation_sizes)
+			then
+				return true
+			end
 			-- A previous protocol installed an unvalidated list. Rebuild it from
 			-- the exact list that protocol captured instead of preserving a bad id.
 			if type(Hooks.fallback_fonts_original) == "table" then
@@ -954,25 +1021,35 @@ function RestoreModDetails.InstallFallbackFonts()
 		end
 	end
 
-	local installed, rejected, seen = {}, {}, {}
+	local installed, rejected, rejected_details, seen = {}, {}, {}, {}
 	local function consider(font)
 		if type(font) ~= "string" or font == "" or seen[font] then return end
 		seen[font] = true
-		local ok, id = pcall(get_font_id, font, 10)
-		if ok and type(id) == "number" and id >= 0 then
-			installed[#installed + 1] = font
-		else
-			rejected[#rejected + 1] = font
+		for index = 1, #validation_sizes do
+			local size = validation_sizes[index]
+			local ok, id = pcall(get_font_id, font, size)
+			if ok ~= true or type(id) ~= "number" or id < 0 then
+				rejected[#rejected + 1] = font
+				rejected_details[#rejected_details + 1] =
+					font .. " @ " .. tostring(size)
+				return
+			end
 		end
+		installed[#installed + 1] = font
 	end
 	for index = 1, #original do consider(original[index]) end
 	for _, font in ipairs(FALLBACK_FONT_NAMES) do consider(font) end
 	if #rejected > 0 then
-		log("WARN", "Skipped unavailable fallback fonts", { fonts = rejected })
+		log("WARN", "Skipped unavailable fallback fonts", {
+			fonts = rejected,
+			failures = rejected_details,
+			validated_sizes = validation_sizes,
+		})
 	end
 	Hooks.fallback_fonts_original = original
 	Hooks.fallback_fonts = installed
 	Hooks.fallback_fonts_expected = table.copy(installed)
+	Hooks.fallback_font_sizes = table.copy(validation_sizes)
 	Hooks.fallback_fonts_validated = true
 	configuration.FallbackFonts = installed
 	return true
@@ -988,6 +1065,7 @@ function RestoreModDetails.RestoreFallbackFonts(reason)
 	Hooks.fallback_fonts = false
 	Hooks.fallback_fonts_original = nil
 	Hooks.fallback_fonts_expected = false
+	Hooks.fallback_font_sizes = false
 	Hooks.fallback_fonts_validated = false
 	return true
 end
@@ -1032,7 +1110,7 @@ function RestoreModDetails.InstallBoldStyle()
 			id = BODY_STYLE_ID,
 			group = "ModsUI",
 			FontName = base and base.FontName or "Noto Sans Regular",
-			FontSize = 20,
+			FontSize = DETAILS_FONT_SIZE,
 			TextColor = base and base.TextColor or RGB(26, 26, 26),
 			RolloverTextColor = base and base.RolloverTextColor or RGB(26, 26, 26),
 			DisabledTextColor = base and base.DisabledTextColor or RGB(26, 26, 26),
@@ -1049,7 +1127,7 @@ function RestoreModDetails.InstallBoldStyle()
 			id = BOLD_STYLE_ID,
 			group = "ModsUI",
 			FontName = base and base.FontName or "Noto Sans Regular",
-			FontSize = 20,
+			FontSize = DETAILS_FONT_SIZE,
 			TextColor = base and base.TextColor or RGB(26, 26, 26),
 			RolloverTextColor = base and base.RolloverTextColor or RGB(26, 26, 26),
 			DisabledTextColor = base and base.DisabledTextColor or RGB(26, 26, 26),
@@ -1576,6 +1654,7 @@ function RestoreModDetails.InstallHook(reason)
 		RestoreModDetails.ReleaseScreenshotField("font_install_failed")
 		return false
 	end
+	Hooks.font_revalidate_fn = RestoreModDetails.InstallFallbackFonts
 	if RestoreModDetails.InstallBoldStyle() ~= true then
 		RestoreModDetails.RestoreFallbackFonts("style_install_failed")
 		RestoreModDetails.ReleaseScreenshotField("style_install_failed")
