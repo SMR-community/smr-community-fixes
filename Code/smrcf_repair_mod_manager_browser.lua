@@ -72,6 +72,7 @@ local RETRIEVE_FN = "ModsUIRetrieveModDetails"
 local DOWNLOAD_FN = "WaitDownloadModScreenshots"
 local SCHEDULE_FN = "ModsUIDownloadScreenshots"
 local DIALOG_MODE_FN = "ModsUISetDialogMode"
+local FONT_HEIGHT_FN = "GetFontHeightAndBaseline"
 local ENTRY_UPDATE_METHOD = "UpdateEntryFromSubscribedMod"
 local ENTRY_CLASS = "ModUI_Entry"
 local SCREENSHOT_URLS_FIELD = "ScreenshotUrls"
@@ -79,6 +80,11 @@ local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
 local DETAILS_FONT_SIZE = 20
 local FALLBACK_FONT_NAMES = { "Segoe UI Emoji", "Segoe UI Symbol" }
+local RUNTIME_FONT_REPLACEMENTS = {
+	"Noto Sans Regular",
+	"Source Sans Pro Regular",
+	"Droid",
+}
 -- How long a downloaded image may be reused for the same URL, and how long a
 -- browser list refresh may block waiting for one. The wait is what keeps the
 -- stale cached image from showing; past the deadline the worker finishes in the
@@ -619,7 +625,7 @@ local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
 	local previous_protocol = Hooks.protocol
-	Hooks.protocol = 9
+	Hooks.protocol = 10
 	if previous_protocol ~= Hooks.protocol then
 		Hooks.fallback_fonts_validated = false
 	end
@@ -627,7 +633,7 @@ if type(previous_hooks) == "table" then
 	Hooks.cleanup_fn = nil
 else
 	Hooks = {
-		protocol = 9,
+		protocol = 10,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -642,6 +648,9 @@ else
 		dialog_original = rawget(_G, DIALOG_MODE_FN),
 		dialog_wrapper = false,
 		dialog_in_call = false,
+		font_height_original = rawget(_G, FONT_HEIGHT_FN),
+		font_height_wrapper = false,
+		font_height_in_call = false,
 		workers = {},
 		modified = setmetatable({}, { __mode = "k" }),
 		owned_paths = {},
@@ -674,6 +683,7 @@ Hooks.notification_gates = Hooks.notification_gates or
 Hooks.download_original = Hooks.download_original or rawget(_G, DOWNLOAD_FN)
 Hooks.schedule_original = Hooks.schedule_original or rawget(_G, SCHEDULE_FN)
 Hooks.dialog_original = Hooks.dialog_original or rawget(_G, DIALOG_MODE_FN)
+Hooks.font_height_original = Hooks.font_height_original or rawget(_G, FONT_HEIGHT_FN)
 Hooks.body_style_id = BODY_STYLE_ID
 Hooks.bold_style_id = BOLD_STYLE_ID
 
@@ -717,6 +727,17 @@ if current_dialog ~= Hooks.dialog_wrapper and type(current_dialog) == "function"
 	Hooks.dialog_original = current_dialog
 end
 Hooks.dialog_base_original = Hooks.dialog_base_original or Hooks.dialog_original
+
+local current_font_height = rawget(_G, FONT_HEIGHT_FN)
+if current_font_height ~= Hooks.font_height_wrapper and
+	type(current_font_height) == "function" then
+	if current_font_height ~= Hooks.font_height_original then
+		Hooks.font_height_original_may_contain_wrapper = true
+	end
+	Hooks.font_height_original = current_font_height
+end
+Hooks.font_height_base_original = Hooks.font_height_base_original or
+	Hooks.font_height_original
 
 if current_entry_update ~= Hooks.entry_update_wrapper and
 	type(current_entry_update) == "function" then
@@ -775,6 +796,20 @@ if type(Hooks.dialog_wrapper) ~= "function" then
 			return Hooks.dialog_base_original(...)
 		end
 		return Hooks.dialog_original(...)
+	end
+end
+if type(Hooks.font_height_wrapper) ~= "function" then
+	Hooks.font_height_wrapper = function(...)
+		if Hooks.font_height_in_call == true then
+			return Hooks.font_height_base_original(...)
+		end
+		if Hooks.enabled == true and type(Hooks.font_height_impl) == "function" then
+			return Hooks.font_height_impl(...)
+		end
+		if Hooks.font_height_original_may_contain_wrapper == true then
+			return Hooks.font_height_base_original(...)
+		end
+		return Hooks.font_height_original(...)
 	end
 end
 if type(Hooks.entry_update_wrapper) ~= "function" then
@@ -931,6 +966,86 @@ local function same_array(left, right)
 		if left[index] ~= right[index] then return false end
 	end
 	return true
+end
+
+local function call_font_height_original(font, size)
+	Hooks.font_height_in_call = true
+	local result = { pcall(Hooks.font_height_original, font, size) }
+	Hooks.font_height_in_call = false
+	if result[1] ~= true then error(result[2], 0) end
+	return table.unpack(result, 2)
+end
+
+local function runtime_font_height(font, size)
+	local id, height, baseline = call_font_height_original(font, size)
+	if type(id) == "number" and id >= 0 then return id, height, baseline end
+
+	local configuration = rawget(_G, "config")
+	local current = type(configuration) == "table" and configuration.FallbackFonts
+	if current ~= Hooks.fallback_fonts or
+		not same_array(current, Hooks.fallback_fonts_expected) then
+		return id, height, baseline
+	end
+
+	local failed_index
+	for index = 1, #current do
+		if current[index] == font then
+			failed_index = index
+			break
+		end
+	end
+	if failed_index == nil then return id, height, baseline end
+
+	-- The engine has resolved the real layout size now. A face can pass every
+	-- UIL.GetFontID preflight and still return -1 here, so remove it from only the
+	-- list this fix owns and resolve this call through a known live UI face.
+	table.remove(current, failed_index)
+	Hooks.fallback_fonts_expected = table.copy(current)
+	Hooks.fallback_fonts_validated = true
+
+	local candidates, seen = {}, { [font] = true }
+	local function consider(candidate)
+		if type(candidate) ~= "string" or candidate == "" or seen[candidate] then
+			return
+		end
+		seen[candidate] = true
+		candidates[#candidates + 1] = candidate
+	end
+	for index = 1, #current do consider(current[index]) end
+	local styles = rawget(_G, "TextStyles")
+	local body_style = type(styles) == "table" and styles[BODY_STYLE_ID]
+	local vanilla_style = type(styles) == "table" and styles.ModsUIDetailsDescription
+	consider(type(body_style) == "table" and body_style.FontName)
+	consider(type(vanilla_style) == "table" and vanilla_style.FontName)
+	for _, candidate in ipairs(RUNTIME_FONT_REPLACEMENTS) do consider(candidate) end
+
+	for index = 1, #candidates do
+		local candidate = candidates[index]
+		local replacement_id, replacement_height, replacement_baseline =
+			call_font_height_original(candidate, size)
+		if type(replacement_id) == "number" and replacement_id >= 0 then
+			local details = correction_context({
+				repair = "replace_invalid_runtime_fallback_font",
+				reason = "the selected fallback face returned an invalid id at the live layout size",
+				failed_font = font,
+				requested_size = size,
+				replacement_font = candidate,
+				replacement_id = replacement_id,
+			})
+			log("WARN", "Replaced fallback font that failed at the live layout size", details)
+			log("INFO", "Bug fix invoked: replaced an invalid fallback font", details)
+			return replacement_id, replacement_height, replacement_baseline
+		end
+	end
+
+	log("ERROR", "No valid replacement exists for a fallback font that failed at runtime",
+		correction_context({
+			repair = "replace_invalid_runtime_fallback_font",
+			failed_font = font,
+			requested_size = size,
+			candidates = candidates,
+		}))
+	return id, height, baseline
 end
 
 local function fallback_font_sizes(uil)
@@ -1628,18 +1743,21 @@ function RestoreModDetails.InstallHook(reason)
 	local current_download_fn = rawget(_G, DOWNLOAD_FN)
 	local current_schedule_fn = rawget(_G, SCHEDULE_FN)
 	local current_dialog_fn = rawget(_G, DIALOG_MODE_FN)
+	local current_font_height_fn = rawget(_G, FONT_HEIGHT_FN)
 	local current_entry_class = rawget(_G, "ModUI_Entry")
 	local current_entry_update_fn = type(current_entry_class) == "table" and
 		current_entry_class[ENTRY_UPDATE_METHOD]
 	if type(current_fn) ~= "function" or type(current_download_fn) ~= "function" or
 		type(current_schedule_fn) ~= "function" or
 		type(current_dialog_fn) ~= "function" or
+		type(current_font_height_fn) ~= "function" or
 		type(current_entry_update_fn) ~= "function" then
 		log("ERROR", "Required v1.0.7 API is unavailable; fix not installed", {
 			fn = RETRIEVE_FN,
 			download_fn = DOWNLOAD_FN,
 			schedule_fn = SCHEDULE_FN,
 			dialog_fn = DIALOG_MODE_FN,
+			font_height_fn = FONT_HEIGHT_FN,
 			entry_update = ENTRY_UPDATE_METHOD,
 			reason = reason,
 		})
@@ -1679,6 +1797,11 @@ function RestoreModDetails.InstallHook(reason)
 		Hooks.dialog_original = current_dialog_fn
 		Hooks.dialog_original_may_contain_wrapper = true
 	end
+	if current_font_height_fn ~= Hooks.font_height_original and
+		current_font_height_fn ~= Hooks.font_height_wrapper then
+		Hooks.font_height_original = current_font_height_fn
+		Hooks.font_height_original_may_contain_wrapper = true
+	end
 	if current_entry_update_fn ~= Hooks.entry_update_original and
 		current_entry_update_fn ~= Hooks.entry_update_wrapper then
 		Hooks.entry_update_original = current_entry_update_fn
@@ -1689,6 +1812,8 @@ function RestoreModDetails.InstallHook(reason)
 	WaitDownloadModScreenshots = Hooks.download_wrapper
 	ModsUIDownloadScreenshots = Hooks.schedule_wrapper
 	ModsUISetDialogMode = Hooks.dialog_wrapper
+	Hooks.font_height_impl = runtime_font_height
+	rawset(_G, FONT_HEIGHT_FN, Hooks.font_height_wrapper)
 	current_entry_class[ENTRY_UPDATE_METHOD] = Hooks.entry_update_wrapper
 	RestoreModDetails.enabled = true
 	Hooks.enabled = true
@@ -1730,6 +1855,9 @@ function RestoreModDetails.RestoreHook(reason)
 	end
 	if rawget(_G, DIALOG_MODE_FN) == Hooks.dialog_wrapper then
 		ModsUISetDialogMode = Hooks.dialog_original
+	end
+	if rawget(_G, FONT_HEIGHT_FN) == Hooks.font_height_wrapper then
+		rawset(_G, FONT_HEIGHT_FN, Hooks.font_height_original)
 	end
 	local current_entry_class = rawget(_G, "ModUI_Entry")
 	if type(current_entry_class) == "table" and
