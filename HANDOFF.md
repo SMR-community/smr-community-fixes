@@ -2,10 +2,49 @@
 
 ## Current request
 
-Keep SMR Community Fixes disabled, but apply Bug Fixes' general Unicode glyph
-cascade so Filter Landing Spots shows real arrow glyphs after the
-font-independent assertion fix. Deploy its updated folder without changing
-active-mod settings, and commit it.
+Keep SMR Community Fixes disabled, but apply Bug Fixes' general literal-angle
+encoding so Filter Landing Spots displays `Use < and > to page through results.`
+instead of generated closing-style text. Deploy its updated folder without
+changing active-mod settings, and commit it.
+
+## Version 23 general literal-angle encoding
+
+Repository: `D:\PROJS\SMR\smr-community-fixes`, branch `main`. Version advances
+22 -> 23 in feature commit `63f921c` (`Preserve literal angle bracket text`).
+The branch was 0 behind / 11 ahead after the feature commit. Nothing was pushed.
+The module is byte-identical to Bug Fixes v55 at SHA-256
+`80E438CC2DECDFBF4C7C8C85A375A9BF1EBEDED7D52EECEBB98C4CCED99CE675`.
+
+The completed 12:56 runtime log discovers Community Fixes v22 but omits `SMRCF`
+from line 189's active list; only Bug Fixes v54 was active. It contains no font,
+XText parse, Asset Info, or call-stack error. The user's screenshot shows the
+remaining presentation bug: generated `</style>` text appears before the literal
+`and >` navigation instruction. No log was edited or deleted.
+
+Read-only ModTools inspection confirms SteamParser generally escapes every raw
+`<` as `<literal 1><`, while XText's `Literal` helper uses the same byte-counted
+encoding. Protocol 13 now preserves only formatter-generated XText tags, honors
+existing `<literal N>` spans without double encoding, and encodes every other raw
+less-than character. This is a general solution for comparisons, `<3`, tag-like
+user text, code, and navigation; no Filter Landing Spots sentence is hardcoded.
+The Unicode glyph cascade is unchanged. Debug remains false and no new runtime
+log line was added.
+
+Checks performed: Community Lua 20/20; registration sync 15 fixes / 16 code / 16
+items; byte-identical Bug Fixes Lua 19/19; all 15 restore-audit rows including
+the exact and general literal cases; Python 7/7; diff checks in both repositories.
+No protected/reference, generated, editor-managed, framework, image, or item file
+was changed.
+
+The game was closed. All 20 v23 payload files were copied to local
+`Mods\smr-community-fixes` with zero missing, stale, or hash mismatches. Bug Fixes
+v55 was copied and verified 21/21 with the same zero findings. Active-mod settings
+were not touched, so Community Fixes remains disabled. Nothing was deleted.
+
+Manual verification is intentionally through Bug Fixes only: keep Community
+Fixes disabled, open Filter Landing Spots, confirm Sites List shows exactly
+`Use < and > to page through results.` without visible style tags, reconfirm the
+Unicode-arrow breadcrumb, and check the newest log for no XText/font errors.
 
 ## Version 22 size-validated Unicode cascade
 
