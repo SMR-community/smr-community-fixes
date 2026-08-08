@@ -16,11 +16,13 @@ was pushed. The module is
 byte-identical to Bug Fixes v54 at SHA-256
 `D2E5F594443C663A528DF4C9F863C892C72F9ECB05AADEEAC8851FD30F0C01ED`.
 
-The user's v53 Bug Fixes screenshot proves the Invalid font id assertion is
-gone, but the access breadcrumb's `→` characters are missing-glyph boxes. The
-newest game log remained a 488-byte header with no runtime evidence; the prior
-12:06 log still proves Community Fixes was discovered but disabled and only Bug
-Fixes was active. No log was edited or deleted.
+The user's v53 Bug Fixes screenshot shows the access breadcrumb's `→` characters
+as missing-glyph boxes. The completed 12:20 game log loads Bug Fixes v53 at line
+80, discovers Community Fixes v21 at line 94, and lists only `SMRBF107` (not
+`SMRCF`) among active items at line 184. It contains no `Invalid font id`,
+`font_id = -1`, failed font creation, Asset Info, or font call stack. This
+validates the assertion fix and isolates the remaining issue to glyph coverage.
+No log was edited or deleted.
 
 Protocol 12 keeps supported Unicode in the active body font and dynamically
 routes each unsupported non-ASCII glyph through private styles built from font
