@@ -558,22 +558,18 @@ When enabled, Repair Mod Manager Browser must:
    retain its vanilla click-to-select behavior.
 3. Detect HTML or Steam BBCode descriptions and parse them with private parser
    instances. Retain headings, bold/italic/underline text, lists, quotes, code,
-   separators, and safe HTTP/HTTPS links; decode numeric Unicode entities; wrap
-   output in the engine's fallback-font mode; and render the entire description
-   at 20 points with a fix-owned visibly bold Noto style. Before enabling that
-   mode, prevalidate every existing and proposed fallback name with
-   `UIL.GetFontID(name, size)` at the parser's size 10, the mod's 20-point body
-   size, every loaded text-style size, their current UI-scaled sizes, and
-   effective sizes already materialized at custom control scales. Revalidate
-   before each Mod Manager detail retrieval and rebuild a list installed by an
-   older validation protocol from its captured original. Because the live engine
-   may still return `-1` after every preflight succeeds, wrap the confirmed
-   global `GetFontHeightAndBaseline(font, size)` call. At the exact requested
-   size, remove an invalid face only from the fallback list owned by this fix and
-   resolve that same call through the first remaining fallback or known live UI
-   face. This runtime guard must not enumerate or cap valid font sizes, and
-   disabling must restore the exact captured function and original fallback
-   table. It must not change the global `HTMLParser` or `SteamParser` classes.
+   separators, and safe HTTP/HTTPS links; decode numeric Unicode entities; and
+   render the entire description at 20 points with fix-owned regular and visibly
+   bold styles that inherit the active Mod Manager body font. Do not enter
+   XText's `<fallback_font>` mode: in v1.0.7 that mode can select a face that
+   returns font id `-1` after successful preflight and at otherwise valid UI
+   scales. Inheriting the active font keeps formatting independent of font names,
+   sizes, locales, and future font packs. An unsupported glyph may use that
+   font's ordinary missing-glyph mark, but it must never invalidate the font id.
+   Do not replace `config.FallbackFonts` or global
+   `GetFontHeightAndBaseline`; on a live upgrade, restore either modification
+   left by protocols 8-10 before continuing. It must not change the global
+   `HTMLParser` or `SteamParser` classes.
 4. Download the current full response's `DisplayImagePath` for detail and list
    entries plus every valid `Screenshots[].Image` in API order, using
    cache-revalidation headers and unique fix-owned files without deleting or
@@ -587,8 +583,8 @@ When enabled, Repair Mod Manager Browser must:
    Vanilla's unfinished screenshot branch is never repaired or run: its URL list
    is withheld for the duration of the captured call only.
 5. Keep reload-safe ownership records for every `LongDescription`, `Thumbnail`,
-   `ScreenshotUrls`, `ScreenshotPaths`, worker, file, text style, class field,
-   and fallback-font list it changes. Disabling or
+   `ScreenshotUrls`, `ScreenshotPaths`, worker, file, text style, and class field
+   it changes. Disabling or
    quiescing must first close the gate and cancel its workers, restore a field
    only while it still equals this fix's installed value, refresh restored
    entries, delete only
@@ -869,9 +865,9 @@ the engine's item-selection translation assertion.
       stalling while a list of rows refreshes; withholds raw detail
       text until HTML or Steam BBCode has been formatted at 20 points with
       visible bold, Unicode arrows/symbols/emoji, website-style paragraph/list
-      spacing, and clickable HTTP/HTTPS links; prevalidates fallback-font names
-      and guards the engine's actual font-metrics call at any requested size so
-      unavailable faces produce no **Invalid font id** assertion; and displays API screenshots in
+      spacing, and clickable HTTP/HTTPS links; inherits the active Mod Manager
+      font without entering XText's invalid fallback-font path, independent of
+      font name or size; and displays API screenshots in
       order below the main image before the page first renders, with each
       thumbnail selecting the large image through the vanilla control. It does
       not alter the vanilla cache or global parser classes. Disabling during
@@ -1062,9 +1058,9 @@ the engine's item-selection translation assertion.
     only the current thumbnail is visible in all three views, with no stale-cache
     flash, and the detail page never exposes the raw description before bold
     text, separated paragraphs, indented/spaced lists, and clickable links have
-    been formatted. Repeat at several UI scales and confirm the log contains no
-    `Invalid font id`, including when a face passes preflight but fails at the
-    live font-metrics size and is replaced. Confirm every
+    been formatted. Repeat at several UI scales and confirm the formatted text
+    contains no `<fallback_font>` markup and the log contains no `Invalid font
+    id` or `font_id = -1`. Confirm every
     screenshot thumbnail appears in API order
     directly below the main image and clicking each one replaces the large image,
     with no `Creating a new key 'ScreenshotUrls'` assertion in the log. Leave the
