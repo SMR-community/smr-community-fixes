@@ -9,6 +9,14 @@ active-mod settings, and commit it.
 
 ## Version 22 size-validated Unicode cascade
 
+Follow-up redeployment: all 15 `smrcf_*.lua` modules were confirmed byte-identical
+to Bug Fixes, then the clean v22 payload was copied again to local
+`Mods\smr-community-fixes` while the game was closed. Verification found 20
+expected/actual files, zero missing, zero stale/destination-only, and zero
+SHA-256 mismatches. The Bug Fixes v54 payload was also copied and verified 21/21
+with the same zero findings. Active-mod settings were not touched, so Community
+Fixes remains disabled. No runtime source changed or version bump was required.
+
 Repository: `D:\PROJS\SMR\smr-community-fixes`, branch `main`. Version advances
 21 -> 22 in feature commit `9952e1c` (`Render Unicode with validated UI font
 cascade`). The branch was 0 behind / 7 ahead after the feature commit. Nothing
