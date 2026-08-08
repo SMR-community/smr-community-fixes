@@ -169,18 +169,41 @@ local GLYPH_CASCADE_SRC = [==[function(hooks, text)
 	end
 
 	local output = {}
+	local markup_tags = {
+		color = true,
+		h = true,
+		horizontal_line = true,
+		literal = true,
+		scale = true,
+		style = true,
+		underline = true,
+	}
+	local literal_bytes = 0
 	local position, length = 1, #text
 	while position <= length do
 		local byte = text:byte(position)
-		if byte == 60 then
-			-- Preserve XText markup verbatim; only visible text receives font runs.
+		if literal_bytes > 0 then
+			local count = math.min(literal_bytes, length - position + 1)
+			output[#output + 1] = text:sub(position, position + count - 1)
+			position = position + count
+			literal_bytes = literal_bytes - count
+		elseif byte == 60 then
+			-- Preserve syntactically valid XText markup verbatim. A literal pair such
+			-- as "Use < and >" is encoded through XText's general literal mechanism
+			-- instead of consuming everything through the next greater-than sign.
 			local close = text:find(">", position + 1, true)
-			if close then
+			local tag = close and text:sub(position, close) or nil
+			local tag_name = tag and
+				tag:match("^</?([%a_][%w_]*)[%s/>]") or nil
+			if tag_name and markup_tags[tag_name] then
 				output[#output + 1] = text:sub(position, close)
 				position = close + 1
+				if tag_name == "literal" and not tag:match("^</") then
+					literal_bytes = tonumber(tag:match("^<literal%s+(%d+)>$")) or 0
+				end
 			else
-				output[#output + 1] = text:sub(position)
-				break
+				output[#output + 1] = "<literal 1><"
+				position = position + 1
 			end
 		elseif byte < 128 then
 			output[#output + 1] = string.char(byte)
@@ -763,13 +786,13 @@ local previous_hooks = type(shared) == "table" and shared.SMRCF_ModDetailsHooks 
 local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
-	Hooks.protocol = 12
+	Hooks.protocol = 13
 	Hooks.worker_fn = nil
 	Hooks.cleanup_fn = nil
 	Hooks.glyph_cascade_fn = nil
 else
 	Hooks = {
-		protocol = 12,
+		protocol = 13,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),

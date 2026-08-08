@@ -570,6 +570,9 @@ When enabled, Repair Mod Manager Browser must:
    hardcode any font family. Common punctuation may use a safe ASCII equivalent
    only when no loaded face supports it; any other unsupported glyph may retain
    its ordinary missing-glyph mark, but it must never invalidate the font id.
+   Preserve only syntactically valid XText tags as markup. Literal navigation
+   text such as `Use < and > to page through results.` must keep both visible
+   angle brackets and must never expose a generated closing style tag.
    Do not replace `config.FallbackFonts` or global
    `GetFontHeightAndBaseline`; on a live upgrade, restore either modification
    left by protocols 8-10 before continuing. It must not change the global
@@ -873,6 +876,8 @@ the engine's item-selection translation assertion.
       font without entering XText's invalid fallback-font path, and routes each
       unsupported non-ASCII glyph through a dynamically discovered loaded font
       that is verified at every emitted render size, independent of font name;
+      preserves literal less-than/greater-than navigation characters without
+      exposing generated style tags;
       and displays API screenshots in
       order below the main image before the page first renders, with each
       thumbnail selecting the large image through the vanilla control. It does
@@ -1067,9 +1072,10 @@ the engine's item-selection translation assertion.
     been formatted. Confirm **New Game → Mission Setup Screen → Rocket Payload
     Screen → Colony Site → Filter** uses arrow glyphs rather than missing-glyph
     boxes, and check accented letters, bullets, symbols, and emoji in other mod
-    descriptions. Repeat at several UI scales and confirm the formatted text
-    contains no `<fallback_font>` markup and the log contains no `Invalid font
-    id` or `font_id = -1`. Confirm every
+    descriptions. Confirm **Sites List** says `Use < and > to page through
+    results.` without displaying `<style>` or `</style>` text. Repeat at several
+    UI scales and confirm the formatted text contains no `<fallback_font>` markup
+    and the log contains no `Invalid font id` or `font_id = -1`. Confirm every
     screenshot thumbnail appears in API order
     directly below the main image and clicking each one replaces the large image,
     with no `Creating a new key 'ScreenshotUrls'` assertion in the log. Leave the
