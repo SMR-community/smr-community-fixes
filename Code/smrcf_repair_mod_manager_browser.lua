@@ -51,6 +51,10 @@
 -- Disable/reload cancels every worker, restores only field values still owned by
 -- this fix, deletes only files this fix created, and restores the exact captured
 -- function while this wrapper still owns the global.
+--
+-- Fallback font names are validated through UIL before they are exposed to
+-- XText. The v1.0.7 parser can otherwise select a missing face, receive -1 from
+-- GetFontHeightAndBaseline, and pass that invalid id to UIL.MeasureText.
 
 local FIX = {
 	id = "repair_mod_manager_browser",
@@ -611,12 +615,16 @@ local previous_hooks = type(shared) == "table" and shared.SMRCF_ModDetailsHooks 
 local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
-	Hooks.protocol = 6
+	local previous_protocol = Hooks.protocol
+	Hooks.protocol = 7
+	if previous_protocol ~= Hooks.protocol then
+		Hooks.fallback_fonts_validated = false
+	end
 	Hooks.worker_fn = nil
 	Hooks.cleanup_fn = nil
 else
 	Hooks = {
-		protocol = 6,
+		protocol = 7,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -649,6 +657,7 @@ else
 		fallback_fonts = false,
 		fallback_fonts_original = nil,
 		fallback_fonts_expected = false,
+		fallback_fonts_validated = false,
 	}
 end
 Hooks.workers = Hooks.workers or {}
@@ -921,22 +930,50 @@ function RestoreModDetails.InstallFallbackFonts()
 	local configuration = rawget(_G, "config")
 	local current = type(configuration) == "table" and configuration.FallbackFonts
 	if type(current) ~= "table" then return true end
+	local uil = rawget(_G, "UIL")
+	local get_font_id = type(uil) == "table" and uil.GetFontID
+	if type(get_font_id) ~= "function" then
+		log("ERROR", "UIL.GetFontID unavailable; cannot validate fallback fonts")
+		return false
+	end
+
+	local original = current
 	if Hooks.fallback_fonts then
 		if current == Hooks.fallback_fonts and
-			same_array(current, Hooks.fallback_fonts_expected) then
+			same_array(current, Hooks.fallback_fonts_expected)
+		then
+			if Hooks.fallback_fonts_validated == true then return true end
+			-- A previous protocol installed an unvalidated list. Rebuild it from
+			-- the exact list that protocol captured instead of preserving a bad id.
+			if type(Hooks.fallback_fonts_original) == "table" then
+				original = Hooks.fallback_fonts_original
+			end
+		else
+			-- A later owner changed or replaced the list. Do not overwrite it.
 			return true
 		end
-		-- A later owner changed or replaced the list. Do not overwrite it.
-		return true
 	end
-	local installed = {}
-	for index = 1, #current do installed[#installed + 1] = current[index] end
-	for _, font in ipairs(FALLBACK_FONT_NAMES) do
-		if not table.find(installed, font) then installed[#installed + 1] = font end
+
+	local installed, rejected, seen = {}, {}, {}
+	local function consider(font)
+		if type(font) ~= "string" or font == "" or seen[font] then return end
+		seen[font] = true
+		local ok, id = pcall(get_font_id, font, 10)
+		if ok and type(id) == "number" and id >= 0 then
+			installed[#installed + 1] = font
+		else
+			rejected[#rejected + 1] = font
+		end
 	end
-	Hooks.fallback_fonts_original = current
+	for index = 1, #original do consider(original[index]) end
+	for _, font in ipairs(FALLBACK_FONT_NAMES) do consider(font) end
+	if #rejected > 0 then
+		log("WARN", "Skipped unavailable fallback fonts", { fonts = rejected })
+	end
+	Hooks.fallback_fonts_original = original
 	Hooks.fallback_fonts = installed
 	Hooks.fallback_fonts_expected = table.copy(installed)
+	Hooks.fallback_fonts_validated = true
 	configuration.FallbackFonts = installed
 	return true
 end
@@ -951,6 +988,7 @@ function RestoreModDetails.RestoreFallbackFonts(reason)
 	Hooks.fallback_fonts = false
 	Hooks.fallback_fonts_original = nil
 	Hooks.fallback_fonts_expected = false
+	Hooks.fallback_fonts_validated = false
 	return true
 end
 

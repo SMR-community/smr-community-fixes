@@ -560,8 +560,14 @@ When enabled, Repair Mod Manager Browser must:
    instances. Retain headings, bold/italic/underline text, lists, quotes, code,
    separators, and safe HTTP/HTTPS links; decode numeric Unicode entities; wrap
    output in the engine's fallback-font mode; and render the entire description
-   at 20 points with a fix-owned visibly bold Noto style. It must not change the
-   global `HTMLParser` or `SteamParser` classes.
+   at 20 points with a fix-owned visibly bold Noto style. Before enabling that
+   mode, validate every existing and proposed fallback name with
+   `UIL.GetFontID(name, 10)` and expose only names that resolve to non-negative
+   numeric ids to XText.
+   Rebuild a list installed by the older unvalidated protocol from its captured
+   original, so a missing face can never become font id `-1` in
+   `UIL.MeasureText`. It must not change the global `HTMLParser` or `SteamParser`
+   classes.
 4. Download the current full response's `DisplayImagePath` for detail and list
    entries plus every valid `Screenshots[].Image` in API order, using
    cache-revalidation headers and unique fix-owned files without deleting or
@@ -857,7 +863,9 @@ the engine's item-selection translation assertion.
       stalling while a list of rows refreshes; withholds raw detail
       text until HTML or Steam BBCode has been formatted at 20 points with
       visible bold, Unicode arrows/symbols/emoji, website-style paragraph/list
-      spacing, and clickable HTTP/HTTPS links; and displays API screenshots in
+      spacing, and clickable HTTP/HTTPS links; validates every fallback-font
+      name before installing it so unavailable faces produce no **Invalid font
+      id** assertion; and displays API screenshots in
       order below the main image before the page first renders, with each
       thumbnail selecting the large image through the vanilla control. It does
       not alter the vanilla cache or global parser classes. Disabling during
@@ -1048,7 +1056,9 @@ the engine's item-selection translation assertion.
     only the current thumbnail is visible in all three views, with no stale-cache
     flash, and the detail page never exposes the raw description before bold
     text, separated paragraphs, indented/spaced lists, and clickable links have
-    been formatted. Confirm every screenshot thumbnail appears in API order
+    been formatted. Confirm the log contains no `Invalid font id`, including
+    when an unavailable configured fallback face is skipped. Confirm every
+    screenshot thumbnail appears in API order
     directly below the main image and clicking each one replaces the large image,
     with no `Creating a new key 'ScreenshotUrls'` assertion in the log. Leave the
     mod page, and confirm the list returns without the screen freezing, both on
