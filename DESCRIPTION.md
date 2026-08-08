@@ -563,9 +563,13 @@ When enabled, Repair Mod Manager Browser must:
    bold styles that inherit the active Mod Manager body font. Do not enter
    XText's `<fallback_font>` mode: in v1.0.7 that mode can select a face that
    returns font id `-1` after successful preflight and at otherwise valid UI
-   scales. Inheriting the active font keeps formatting independent of font names,
-   sizes, locales, and future font packs. An unsupported glyph may use that
-   font's ordinary missing-glyph mark, but it must never invalidate the font id.
+   scales. For each non-ASCII glyph unavailable in the inherited body font,
+   build a private cascade from distinct font names already used by loaded text
+   styles and locally select the first face that supports that glyph at the
+   current UI scale and every normal or heading size the formatter emits. Do not
+   hardcode any font family. Common punctuation may use a safe ASCII equivalent
+   only when no loaded face supports it; any other unsupported glyph may retain
+   its ordinary missing-glyph mark, but it must never invalidate the font id.
    Do not replace `config.FallbackFonts` or global
    `GetFontHeightAndBaseline`; on a live upgrade, restore either modification
    left by protocols 8-10 before continuing. It must not change the global
@@ -866,8 +870,10 @@ the engine's item-selection translation assertion.
       text until HTML or Steam BBCode has been formatted at 20 points with
       visible bold, Unicode arrows/symbols/emoji, website-style paragraph/list
       spacing, and clickable HTTP/HTTPS links; inherits the active Mod Manager
-      font without entering XText's invalid fallback-font path, independent of
-      font name or size; and displays API screenshots in
+      font without entering XText's invalid fallback-font path, and routes each
+      unsupported non-ASCII glyph through a dynamically discovered loaded font
+      that is verified at every emitted render size, independent of font name;
+      and displays API screenshots in
       order below the main image before the page first renders, with each
       thumbnail selecting the large image through the vanilla control. It does
       not alter the vanilla cache or global parser classes. Disabling during
@@ -1058,7 +1064,10 @@ the engine's item-selection translation assertion.
     only the current thumbnail is visible in all three views, with no stale-cache
     flash, and the detail page never exposes the raw description before bold
     text, separated paragraphs, indented/spaced lists, and clickable links have
-    been formatted. Repeat at several UI scales and confirm the formatted text
+    been formatted. Confirm **New Game → Mission Setup Screen → Rocket Payload
+    Screen → Colony Site → Filter** uses arrow glyphs rather than missing-glyph
+    boxes, and check accented letters, bullets, symbols, and emoji in other mod
+    descriptions. Repeat at several UI scales and confirm the formatted text
     contains no `<fallback_font>` markup and the log contains no `Invalid font
     id` or `font_id = -1`. Confirm every
     screenshot thumbnail appears in API order

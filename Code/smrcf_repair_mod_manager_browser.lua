@@ -52,11 +52,11 @@
 -- this fix, deletes only files this fix created, and restores the exact captured
 -- function while this wrapper still owns the global.
 --
--- Fallback font names are validated through UIL at every loaded text-style
--- size, including each style's current UI-scaled size, before they are exposed
--- to XText. The v1.0.7 parser probes glyphs only at size 10 even though it later
--- creates the selected face at the active style size; a face can pass that probe
--- and still return -1 at another size, which is then passed to UIL.MeasureText.
+-- Formatted text stays in the active Mod Manager font unless that exact face is
+-- missing a Unicode glyph. A private, per-description cascade then selects only
+-- from fonts already used by loaded text styles and verifies the glyph at every
+-- size this formatter can render before inserting a local style around it. This
+-- avoids XText's broken global fallback path without hardcoding a font family.
 
 local FIX = {
 	id = "repair_mod_manager_browser",
@@ -78,6 +78,7 @@ local ENTRY_CLASS = "ModUI_Entry"
 local SCREENSHOT_URLS_FIELD = "ScreenshotUrls"
 local BODY_STYLE_ID = "SMRCFModsUIDetailsBody"
 local BOLD_STYLE_ID = "SMRCFModsUIDetailsBold"
+local GLYPH_STYLE_PREFIX = "SMRCFModsUIDetailsGlyph"
 local DETAILS_FONT_SIZE = 20
 -- How long a downloaded image may be reused for the same URL, and how long a
 -- browser list refresh may block waiting for one. The wait is what keeps the
@@ -85,6 +86,145 @@ local DETAILS_FONT_SIZE = 20
 -- background and refreshes the entry itself, so the browser never freezes.
 local IMAGE_CACHE_TTL_MS = 5 * 60 * 1000
 local LIST_REFRESH_WAIT_MS = 250
+
+-- Runs in the game environment, where TextStyle methods and UIL are available.
+-- XText's own fallback path validates at size 10 and renders at another size;
+-- this resolver instead requires the glyph at the actual UI scale and at all
+-- three sizes emitted by the formatter (body, h2, and h1).
+local GLYPH_CASCADE_SRC = [==[function(hooks, text)
+	text = tostring(text or "")
+	local styles = rawget(_G, "TextStyles")
+	local ui = rawget(_G, "UIL")
+	if type(styles) ~= "table" or type(ui) ~= "table" or
+		type(ui.AreGlyphsValid) ~= "function" then
+		return text
+	end
+
+	local scales, scale_seen = {}, {}
+	local function add_scale(value)
+		value = type(value) == "number" and math.floor(value + 0.5) or nil
+		if value and value > 0 and not scale_seen[value] then
+			scale_seen[value] = true
+			scales[#scales + 1] = value
+		end
+	end
+	local function add_render_scales(base_scale)
+		add_scale(base_scale)
+		add_scale(base_scale * 1100 / 1000)
+		add_scale(base_scale * 1200 / 1000)
+	end
+	add_render_scales(1000)
+	local get_ui_scale = rawget(_G, "GetUIScale")
+	local ui_scale = type(get_ui_scale) == "function" and get_ui_scale() or 1000
+	if type(ui_scale) == "number" and ui_scale > 0 then
+		add_render_scales(ui_scale)
+	end
+
+	local candidates = {}
+	local function add_candidate(style_id)
+		local style = styles[style_id]
+		local get_metrics = type(style) == "table" and
+			style.GetFontIdHeightBaseline or nil
+		if type(get_metrics) ~= "function" then return end
+		local ids = {}
+		for index = 1, #scales do
+			local id = get_metrics(style, scales[index])
+			if type(id) ~= "number" or id < 0 then return end
+			ids[#ids + 1] = id
+		end
+		candidates[#candidates + 1] = { style = style_id, ids = ids }
+	end
+	add_candidate(hooks.body_style_id)
+	for _, style_id in ipairs(hooks.glyph_style_ids or empty_table) do
+		add_candidate(style_id)
+	end
+	if #candidates == 0 then return text end
+
+	local resolved, resolution_seen = {}, {}
+	local substitutions = hooks.glyph_ascii_substitutions or empty_table
+	local function resolve(glyph)
+		if resolution_seen[glyph] then return resolved[glyph] end
+		resolution_seen[glyph] = true
+		for candidate_index = 1, #candidates do
+			local candidate = candidates[candidate_index]
+			local valid = true
+			for id_index = 1, #candidate.ids do
+				if ui.AreGlyphsValid(candidate.ids[id_index], glyph) ~= true then
+					valid = false
+					break
+				end
+			end
+			if valid then
+				-- The first candidate is the body style, so no wrapper is needed.
+				if candidate_index == 1 then
+					resolved[glyph] = false
+				else
+					resolved[glyph] = candidate.style
+				end
+				return resolved[glyph]
+			end
+		end
+		resolved[glyph] = substitutions[glyph]
+		return resolved[glyph]
+	end
+
+	local output = {}
+	local position, length = 1, #text
+	while position <= length do
+		local byte = text:byte(position)
+		if byte == 60 then
+			-- Preserve XText markup verbatim; only visible text receives font runs.
+			local close = text:find(">", position + 1, true)
+			if close then
+				output[#output + 1] = text:sub(position, close)
+				position = close + 1
+			else
+				output[#output + 1] = text:sub(position)
+				break
+			end
+		elseif byte < 128 then
+			output[#output + 1] = string.char(byte)
+			position = position + 1
+		else
+			local glyph_length
+			if byte >= 194 and byte <= 223 then
+				glyph_length = 2
+			elseif byte >= 224 and byte <= 239 then
+				glyph_length = 3
+			elseif byte >= 240 and byte <= 244 then
+				glyph_length = 4
+			end
+			local glyph = glyph_length and text:sub(position,
+				position + glyph_length - 1) or text:sub(position, position)
+			local valid_utf8 = glyph_length and #glyph == glyph_length
+			if valid_utf8 then
+				for index = 2, glyph_length do
+					local continuation = glyph:byte(index)
+					if continuation < 128 or continuation > 191 then
+						valid_utf8 = false
+						break
+					end
+				end
+			end
+			if not valid_utf8 then
+				output[#output + 1] = text:sub(position, position)
+				position = position + 1
+			else
+				local selected = resolve(glyph)
+				if type(selected) == "string" and selected:match("^SMRCFModsUIDetailsGlyph") then
+					output[#output + 1] = "<style " .. selected .. ">" ..
+						glyph .. "</style>"
+				elseif type(selected) == "string" then
+					output[#output + 1] = selected
+				else
+					output[#output + 1] = glyph
+				end
+				position = position + glyph_length
+			end
+		end
+	end
+	return table.concat(output)
+end]==]
 
 -- Runs in the game environment, not this mod's restricted environment.
 local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
@@ -205,6 +345,11 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 	end
 
 	local function format_description(input)
+		local function apply_glyph_cascade(text)
+			local cascade = hooks.glyph_cascade_fn
+			return type(cascade) == "function" and cascade(hooks, text) or text
+		end
+
 		local function encode_utf8(codepoint)
 			if not codepoint or codepoint < 0 or codepoint > 0x10ffff or
 				(codepoint >= 0xd800 and codepoint <= 0xdfff) then
@@ -318,6 +463,7 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 				return "<h OpenUrl " .. link:gsub("%s", "+") .. ">"
 			end)
 			output = output:gsub("\n\n\n+", "\n\n")
+			output = apply_glyph_cascade(output)
 			return "<style " .. hooks.body_style_id .. ">" .. output .. "</style>"
 		end
 
@@ -433,6 +579,7 @@ local WORKER_SRC = [==[function(mod, hooks, vanilla_thread, generation,
 		output = output:gsub(list_close_mark, "\n\n")
 		output = output:gsub(item_mark, "\n")
 		output = output:gsub("\n\n\n+", "\n\n")
+		output = apply_glyph_cascade(output)
 		return "<style " .. hooks.body_style_id .. ">" .. output .. "</style>"
 	end
 
@@ -616,12 +763,13 @@ local previous_hooks = type(shared) == "table" and shared.SMRCF_ModDetailsHooks 
 local Hooks
 if type(previous_hooks) == "table" then
 	Hooks = previous_hooks
-	Hooks.protocol = 11
+	Hooks.protocol = 12
 	Hooks.worker_fn = nil
 	Hooks.cleanup_fn = nil
+	Hooks.glyph_cascade_fn = nil
 else
 	Hooks = {
-		protocol = 11,
+		protocol = 12,
 		enabled = false,
 		generation = 0,
 		original = rawget(_G, RETRIEVE_FN),
@@ -647,6 +795,8 @@ else
 		bold_style_id = BOLD_STYLE_ID,
 		bold_style = false,
 		bold_style_original = nil,
+		glyph_styles = {},
+		glyph_style_ids = {},
 		entry_update_original = false,
 		entry_update_wrapper = false,
 		entry_update_in_call = false,
@@ -666,6 +816,20 @@ Hooks.dialog_original = Hooks.dialog_original or rawget(_G, DIALOG_MODE_FN)
 Hooks.font_revalidate_fn = nil
 Hooks.body_style_id = BODY_STYLE_ID
 Hooks.bold_style_id = BOLD_STYLE_ID
+Hooks.glyph_styles = Hooks.glyph_styles or {}
+Hooks.glyph_style_ids = Hooks.glyph_style_ids or {}
+Hooks.glyph_ascii_substitutions = {
+	["→"] = "->",
+	["–"] = "-",
+	["—"] = "--",
+	["…"] = "...",
+	["•"] = "*",
+	["‘"] = "'",
+	["’"] = "'",
+	["“"] = '"',
+	["”"] = '"',
+	[" "] = " ",
+}
 
 local entry_class = rawget(_G, "ModUI_Entry")
 local current_entry_update = type(entry_class) == "table" and
@@ -882,7 +1046,8 @@ function RestoreModDetails.ReleaseScreenshotField(reason)
 end
 
 local function compile_runtime()
-	if type(Hooks.worker_fn) == "function" and type(Hooks.cleanup_fn) == "function" then
+	if type(Hooks.worker_fn) == "function" and type(Hooks.cleanup_fn) == "function" and
+		type(Hooks.glyph_cascade_fn) == "function" then
 		return true
 	end
 	local eval = rawget(_G, "LuaCodeToTuple")
@@ -890,26 +1055,33 @@ local function compile_runtime()
 		log("ERROR", "LuaCodeToTuple unavailable; cannot compile detail repair")
 		return false
 	end
+	local glyph_err, glyph_cascade_fn = eval(GLYPH_CASCADE_SRC)
 	local worker_err, worker_fn = eval(WORKER_SRC)
 	local cleanup_err, cleanup_fn = eval(CLEANUP_SRC)
-	if worker_err ~= nil or type(worker_fn) ~= "function" or
+	if glyph_err ~= nil or type(glyph_cascade_fn) ~= "function" or
+		worker_err ~= nil or type(worker_fn) ~= "function" or
 		cleanup_err ~= nil or type(cleanup_fn) ~= "function" then
 		log("ERROR", "Failed to compile mod-detail worker", {
+			glyph_error = glyph_err,
 			worker_error = worker_err,
 			cleanup_error = cleanup_err,
 		})
 		return false
 	end
+	Hooks.glyph_cascade_fn = glyph_cascade_fn
 	Hooks.worker_fn = worker_fn
 	Hooks.cleanup_fn = cleanup_fn
 	return true
 end
 
-local function clear_bold_style_cache()
+local function clear_description_style_cache()
 	local cache = rawget(_G, "TextStyleCache")
 	if type(cache) == "table" then
 		cache[BODY_STYLE_ID] = nil
 		cache[BOLD_STYLE_ID] = nil
+		for _, record in ipairs(Hooks.glyph_styles or empty_table) do
+			cache[record.id] = nil
+		end
 	end
 end
 
@@ -925,7 +1097,7 @@ end
 
 local function restore_legacy_font_state(reason)
 	-- Protocol 10 tried to repair XText's font resolver globally. The live game
-	-- proved that XText can bypass that replacement, so protocol 11 removes the
+	-- proved that XText can bypass that replacement, so protocols 11+ remove the
 	-- fallback-font tag entirely and migrates any state left by an older reload.
 	local configuration = rawget(_G, "config")
 	local fallback_restored = false
@@ -972,12 +1144,34 @@ local function restore_legacy_font_state(reason)
 	return all_ok
 end
 
+local function release_glyph_styles(styles, reason)
+	local all_ok = true
+	for _, record in ipairs(Hooks.glyph_styles or empty_table) do
+		local current = styles[record.id]
+		if current == record.style then
+			styles[record.id] = record.original
+		elseif current ~= nil then
+			log("ERROR", "A later text style owns a glyph-cascade style id; leaving it unchanged", {
+				style = record.id,
+				reason = reason,
+			})
+			all_ok = false
+		end
+	end
+	clear_description_style_cache()
+	Hooks.glyph_styles = {}
+	Hooks.glyph_style_ids = {}
+	return all_ok
+end
+
 function RestoreModDetails.InstallBoldStyle()
 	local styles = rawget(_G, "TextStyles")
 	local text_style = rawget(_G, "TextStyle")
+	local ui = rawget(_G, "UIL")
 	if type(styles) ~= "table" or type(text_style) ~= "table" or
-		type(text_style.new) ~= "function" then
-		log("ERROR", "TextStyle API unavailable; cannot install rich bold text")
+		type(text_style.new) ~= "function" or type(ui) ~= "table" or
+		type(ui.AreGlyphsValid) ~= "function" then
+		log("ERROR", "TextStyle or glyph-validation API unavailable; cannot install description styles")
 		return false
 	end
 	local base = styles.ModsUIDetailsDescription
@@ -1011,6 +1205,28 @@ function RestoreModDetails.InstallBoldStyle()
 			return false
 		end
 	end
+	if release_glyph_styles(styles, "rebuild") ~= true then return false end
+
+	-- Build the cascade entirely from fonts already present in loaded text
+	-- styles. Frequency keeps normal UI faces ahead of specialist/icon faces;
+	-- the runtime resolver still accepts a face only when every rendered size
+	-- contains the exact glyph being placed.
+	local font_uses = {}
+	for _, style in pairs(styles) do
+		local font = type(style) == "table" and style.FontName or nil
+		if type(font) == "string" and font ~= "" and font ~= base.FontName then
+			font_uses[font] = (font_uses[font] or 0) + 1
+		end
+	end
+	local glyph_fonts = {}
+	for font, uses in pairs(font_uses) do
+		glyph_fonts[#glyph_fonts + 1] = { font = font, uses = uses }
+	end
+	table.sort(glyph_fonts, function(left, right)
+		if left.uses ~= right.uses then return left.uses > right.uses end
+		return left.font < right.font
+	end)
+
 	if not Hooks.body_style then
 		Hooks.body_style_original = body_current
 		Hooks.body_style = text_style:new({
@@ -1049,7 +1265,40 @@ function RestoreModDetails.InstallBoldStyle()
 	end
 	styles[BODY_STYLE_ID] = Hooks.body_style
 	styles[BOLD_STYLE_ID] = Hooks.bold_style
-	clear_bold_style_cache()
+	for index, candidate in ipairs(glyph_fonts) do
+		local style_id = GLYPH_STYLE_PREFIX .. string.format("%03d", index)
+		local style = text_style:new({
+			id = style_id,
+			group = "ModsUI",
+			FontName = candidate.font,
+			FontSize = DETAILS_FONT_SIZE,
+			TextColor = base.TextColor or RGB(26, 26, 26),
+			RolloverTextColor = base.RolloverTextColor or RGB(26, 26, 26),
+			DisabledTextColor = base.DisabledTextColor or RGB(26, 26, 26),
+			DisabledRolloverTextColor = base.DisabledRolloverTextColor or RGB(26, 26, 26),
+			ShadowType = base.ShadowType or "shadow",
+			ShadowSize = base.ShadowSize or 0,
+			ShadowColor = base.ShadowColor or 0,
+			ShadowDir = base.ShadowDir or point(1, 1),
+		})
+		Hooks.glyph_styles[#Hooks.glyph_styles + 1] = {
+			id = style_id,
+			font = candidate.font,
+			original = styles[style_id],
+			style = style,
+		}
+		Hooks.glyph_style_ids[#Hooks.glyph_style_ids + 1] = style_id
+		styles[style_id] = style
+	end
+	clear_description_style_cache()
+	log("INFO", "Installed font-independent description glyph cascade", {
+		body_font = base.FontName,
+		candidate_fonts = #glyph_fonts,
+		font_size = DETAILS_FONT_SIZE,
+	})
+	if #glyph_fonts == 0 then
+		log("WARN", "No alternate loaded UI fonts are available; common punctuation will use safe ASCII substitutions when needed")
+	end
 	return true
 end
 
@@ -1066,12 +1315,14 @@ function RestoreModDetails.RestoreBoldStyle(reason)
 		styles[BOLD_STYLE_ID] = Hooks.bold_style_original
 		restored = true
 	end
-	if restored then clear_bold_style_cache() end
+	local glyphs_ok = type(styles) ~= "table" or
+		release_glyph_styles(styles, reason)
+	if restored then clear_description_style_cache() end
 	Hooks.body_style = false
 	Hooks.body_style_original = nil
 	Hooks.bold_style = false
 	Hooks.bold_style_original = nil
-	return true
+	return glyphs_ok == true
 end
 
 local function begin_notification_gate(mod)
